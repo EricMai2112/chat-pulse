@@ -1,0 +1,184 @@
+@import 'tailwindcss';
+
+@custom-variant dark (&:is(.dark *));
+:root {
+  --background: hsl(240 30% 98%);
+  --foreground: hsl(240 10% 15%);
+  --card: hsl(240 30% 100%);
+  --card-foreground: hsl(240 10% 15%);
+  --popover: hsl(240 30% 100%);
+  --popover-foreground: hsl(240 10% 15%);
+  --primary: hsl(230 85% 60%);
+  --primary-foreground: hsl(0 0% 100%);
+  --secondary: hsl(270 75% 65%);
+  --secondary-foreground: hsl(0 0% 100%);
+  --muted: hsl(240 15% 90%);
+  --muted-foreground: hsl(240 10% 40%);
+  --accent: hsl(255 80% 95%);
+  --accent-foreground: hsl(255 80% 40%);
+  --destructive: hsl(0 84% 60%);
+  --destructive-foreground: hsl(0 0% 100%);
+  --border: hsl(240 15% 85%);
+  --input: hsl(240 15% 92%);
+  --ring: hsl(255 80% 55%);
+  --chart-1: hsl(217 91% 60%);
+  --chart-2: hsl(271 91% 65%);
+  --chart-3: hsl(199 89% 48%);
+  --chart-4: hsl(280 65% 60%);
+  --chart-5: hsl(240 80% 70%);
+  --sidebar: hsl(240 20% 96%);
+  --sidebar-foreground: hsl(240 10% 20%);
+  --sidebar-primary: hsl(230 85% 60%);
+  --sidebar-primary-foreground: hsl(0 0% 100%);
+  --sidebar-accent: hsl(255 80% 92%);
+  --sidebar-accent-foreground: hsl(255 80% 35%);
+  --sidebar-border: hsl(240 15% 88%);
+  --sidebar-ring: hsl(255 80% 55%);
+  --font-sans: Inter, system-ui, sans-serif;
+  --font-serif: Georgia, serif;
+  --font-mono: JetBrains Mono, monospace;
+  --radius: 0.75rem;
+  --shadow-x: 0px;
+  --shadow-y: 4px;
+  --shadow-blur: 15px;
+  --shadow-spread: 0px;
+  --shadow-opacity: 0.08;
+  --shadow-color: hsl(240, 10%, 0%);
+  --shadow-2xs: 0px 4px 15px 0px hsl(240 10% 0% / 0.04);
+  --shadow-xs: 0px 4px 15px 0px hsl(240 10% 0% / 0.04);
+  --shadow-sm: 0px 4px 15px 0px hsl(240 10% 0% / 0.08), 0px 1px 2px -1px hsl(240 10% 0% / 0.08);
+  --shadow: 0px 4px 15px 0px hsl(240 10% 0% / 0.08), 0px 1px 2px -1px hsl(240 10% 0% / 0.08);
+  --shadow-md: 0px 4px 15px 0px hsl(240 10% 0% / 0.08), 0px 2px 4px -1px hsl(240 10% 0% / 0.08);
+  --shadow-lg: 0px 4px 15px 0px hsl(240 10% 0% / 0.08), 0px 4px 6px -1px hsl(240 10% 0% / 0.08);
+  --shadow-xl: 0px 4px 15px 0px hsl(240 10% 0% / 0.08), 0px 8px 10px -1px hsl(240 10% 0% / 0.08);
+  --shadow-2xl: 0px 4px 15px 0px hsl(240 10% 0% / 0.2);
+  --tracking-normal: -0.01em;
+  --spacing: 0.25rem;
+}
+
+.dark {
+  --background: hsl(240 25% 7%);
+  --foreground: hsl(240 20% 98%);
+  --card: hsl(240 25% 10%);
+  --card-foreground: hsl(240 20% 98%);
+  --popover: hsl(240 25% 10%);
+  --popover-foreground: hsl(240 20% 98%);
+  --primary: hsl(230 85% 65%);
+  --primary-foreground: hsl(240 25% 7%);
+  --secondary: hsl(270 75% 60%);
+  --secondary-foreground: hsl(240 25% 7%);
+  --muted: hsl(240 20% 18%);
+  --muted-foreground: hsl(240 10% 65%);
+  --accent: hsl(255 70% 20%);
+  --accent-foreground: hsl(255 70% 85%);
+  --destructive: hsl(0 62% 40%);
+  --destructive-foreground: hsl(0 0% 100%);
+  --border: hsl(240 20% 18%);
+  --input: hsl(240 20% 15%);
+  --ring: hsl(255 80% 65%);
+  --chart-1: hsl(217 91% 65%);
+  --chart-2: hsl(271 91% 70%);
+  --chart-3: hsl(199 89% 55%);
+  --chart-4: hsl(280 65% 65%);
+  --chart-5: hsl(240 80% 75%);
+  --sidebar: hsl(240 25% 9%);
+  --sidebar-foreground: hsl(240 10% 90%);
+  --sidebar-primary: hsl(230 85% 65%);
+  --sidebar-primary-foreground: hsl(240 25% 7%);
+  --sidebar-accent: hsl(255 70% 15%);
+  --sidebar-accent-foreground: hsl(255 70% 90%);
+  --sidebar-border: hsl(240 20% 15%);
+  --sidebar-ring: hsl(255 80% 65%);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+  --font-serif: var(--font-serif);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  /* THÊM ANIMATION CHO DROPDOWN COLLAPSIBLE Ở ĐÂY */
+  --animate-collapsible-down: collapsible-down 0.25s ease-out;
+  --animate-collapsible-up: collapsible-up 0.25s ease-out;
+}
+
+body {
+  letter-spacing: var(--tracking-normal);
+  background-color: var(--background);
+  color: var(--foreground);
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-button {
+  display: none;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background-color: var(--border);
+  border-radius: 10px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--muted-foreground);
+}
+
+/* KEYFRAMES ĐỂ LÀM MƯỢT HIỆU ỨNG MỞ GẬP HEIGHT CỦA SHADCN UI */
+@keyframes collapsible-down {
+  from {
+    height: 0;
+    opacity: 0;
+  }
+  to {
+    height: var(--radix-collapsible-content-height);
+    opacity: 1;
+  }
+}
+
+@keyframes collapsible-up {
+  from {
+    height: var(--radix-collapsible-content-height);
+    opacity: 1;
+  }
+  to {
+    height: 0;
+    opacity: 0;
+  }
+}

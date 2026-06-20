@@ -1,0 +1,49 @@
+import type { User } from '@/types/user.type'
+import http from '@/utils/http'
+
+export interface BodyUpdateProfile extends Partial<Omit<User, '_id' | 'created_at' | 'updated_at' | 'email'>> {
+  new_password?: string
+  public_key?: string
+}
+
+export interface ChangePasswordBody {
+  old_password: string
+  password: string
+  confirm_password: string
+}
+
+const userApi = {
+  getMe() {
+    return http.get<{ message: string; user: User }>('/users/me')
+  },
+
+  getListBlockedUser() {
+    return http.get<{ message: string; result: { _id: string; user_id: string; blocked_user_id: string; user: User }[] }>('/users/block')
+  },
+
+  unBlockUser(user_id: string) {
+    return http.delete(`/users/unblock/${user_id}`)
+  },
+
+  blockUser(body: { blocked_user_id: string }) {
+    return http.post('/users/block', body)
+  },
+
+  updateMe(body: BodyUpdateProfile) {
+    return http.patch('/users/update-profile', body)
+  },
+
+  changePassword(body: ChangePasswordBody) {
+    return http.put('/users/change-password', body)
+  },
+
+  uploadAvatar(body: FormData) {
+    return http.post('/users/upload-avatar', body, {
+      headers: {
+        'Content-Type': 'multipart/form-data'
+      }
+    })
+  }
+}
+
+export default userApi

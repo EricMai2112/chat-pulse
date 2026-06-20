@@ -1,0 +1,601 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import { useState, useEffect, useRef, useContext, useMemo, useCallback } from 'react'
+import { useSocket } from '@/context/socket.context'
+import { AppContext } from '@/context/app.context'
+import { conversationsApi } from '@/apis/conversations.api'
+import { toast } from 'sonner'
+
+export function useConversations() {
+  const { profile, activeChat, setActiveChat } = useContext(AppContext)
+  const { socket } = useSocket()
+
+  const [chatList, setChatList] = useState<any[]>([])
+  const [isLoading, setIsLoading] = useState(false)
+  const [refetchTrigger, setRefetchTrigger] = useState(0)
+
+  const activeChatRef = useRef(activeChat)
+
+  useEffect(() => {
+    activeChatRef.current = activeChat
+  }, [activeChat])
+
+  // --- HÀM HELPER SẮP XẾP ---
+  // Ưu tiên đoạn chat có bản nháp lên trên cùng, sau đó mới đến thời gian mới nhất
+  const sortChats = useCallback((chats: any[]) => {
+    return chats.sort((a, b) => {
+      const activeIdStr = String(activeChatRef.current?.id || '')
+      // Draft chỉ ưu tiên nhảy lên top khi nó CÓ NỘI DUNG và KHÔNG PHẢI là box đang mở
+      const aIsDraftVisible = a.draftContent && String(a.id) !== activeIdStr
+      const bIsDraftVisible = b.draftContent && String(b.id) !== activeIdStr
+
+      if (aIsDraftVisible && !bIsDraftVisible) return -1
+      if (!aIsDraftVisible && bIsDraftVisible) return 1
+      return b.timestamp - a.timestamp
+    })
+  }, [])
+
+  // --- 1. LẤY DANH SÁCH CUỘC TRÒ CHUYỆN ---
+  const fetchChats = useCallback(async () => {
+    if (!profile) return
+    setIsLoading(true)
+    try {
+      const res = await conversationsApi.getConversations()
+      let rawData = res.data?.result || res.data?.data || res.data
+      if (!Array.isArray(rawData)) rawData = []
+
+      const formattedChats = rawData.map((conv: any) => {
+        let chatName = 'Cuộc trò chuyện'
+        let isOnline = false
+        let lastActiveAt = undefined
+
+        if (conv.type === 'direct') {
+          const otherUser = conv.participants?.find((p: any) => String(p._id) !== String(profile._id))
+          if (otherUser) {
+            chatName = otherUser.userName || otherUser.fullName || 'Người dùng'
+            isOnline = otherUser.isOnline === true
+            lastActiveAt = otherUser.last_active_at || otherUser.lastActiveAt
+          }
+        } else if (conv.type === 'group') {
+          if (conv.name) {
+            chatName = conv.name
+          } else if (conv.participants) {
+            const otherUsers = conv.participants.filter((p: any) => String(p._id) !== String(profile._id))
+            chatName = otherUsers.map((u: any) => u.userName || u.fullName).join(', ')
+            if (!chatName) chatName = 'Nhóm trò chuyện'
+          }
+        }
+
+        const timeString = conv.updated_at
+          ? new Date(conv.updated_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          : ''
+
+        let lastMessageContent = 'Chưa có tin nhắn nào...'
+        let prefix = ''
+
+        if (conv.lastMessage && (conv.lastMessage.content || conv.lastMessage.type)) {
+          let content = conv.lastMessage.content
+
+          if (conv.lastMessage.type === 'revoked') {
+            content = 'Tin nhắn đã được thu hồi'
+            prefix = ''
+          } else if (
+            conv.lastMessage.type === 'image' ||
+            conv.lastMessage.type === 'media' ||
+            conv.lastMessage.content?.match(/\.(jpg|jpeg|png|gif|webp)(\?.*)?$/i)
+          ) {
+            content = '[Hình ảnh]'
+          } else if (conv.lastMessage.type === 'video' || conv.lastMessage.content?.match(/\.(mp4|mov)(\?.*)?$/i)) {
+            content = '[Video]'
+          } else if (conv.lastMessage.type === 'file') {
+            content = '[Tệp đính kèm]'
+          } else if (conv.lastMessage.type === 'call') {
+            content = '[Cuộc gọi]'
+          } else if (conv.lastMessage.type === 'sticker') {
+            content = '[Nhãn dán]'
+          } else if (conv.lastMessage.type === 'system') {
+            prefix = ''
+          } else if (!content) {
+            content = 'Tin nhắn'
+          }
+
+          if (
+            conv.lastMessage.type !== 'revoked' &&
+            conv.lastMessage.type !== 'system' &&
+            (conv.lastMessage.sender_id || conv.lastMessage.senderId)
+          ) {
+            const senderId = conv.lastMessage.sender_id || conv.lastMessage.senderId
+            const isMe = String(senderId) === String(profile._id)
+            if (isMe) {
+              prefix = 'Bạn: '
+            } else if (conv.type === 'group') {
+              const sender = conv.participants?.find((p: any) => String(p._id) === String(senderId))
+              if (sender) {
+                const senderName = sender.userName || sender.fullName || 'Thành viên'
+                prefix = `${senderName}: `
+              }
+            }
+          }
+          lastMessageContent = content
+        }
+
+        const unreadCount = conv.unread_count ?? conv.unreadCount ?? 0
+
+        // Đọc bản nháp từ LocalStorage khi khởi tạo
+        const draftContent = localStorage.getItem(`draft_${conv._id}`) || ''
+        const isFriendStatus = conv.isFriend === false ? false : true
+
+        return {
+          id: conv._id,
+          name: chatName,
+          message: lastMessageContent,
+          lastMessageId: conv.last_message_id,
+          time: timeString,
+          timestamp: new Date(conv.updated_at || 0).getTime(),
+          type: conv.type,
+          avatarUrl: conv.avatarUrl,
+          participants: conv.participants || [],
+          admin_id: conv.admin_id,
+          isOnline,
+          lastActiveAt,
+          unreadCount,
+          draftContent,
+          isFriend: isFriendStatus,
+          senderPrefix: prefix,
+          isE2E: conv.lastMessage?.isE2E || false,
+          encryptedKeys: conv.lastMessage?.encryptedKeys || {},
+          // Map trạng thái giải tán từ server
+          is_disbanded: conv.is_disbanded === true,
+          isDisbanded: conv.is_disbanded === true,
+          activeCall: conv.activeCall
+        }
+      })
+
+      const uniqueChatsMap = new Map()
+      formattedChats.forEach((chat: any) => {
+        if (!uniqueChatsMap.has(chat.id)) uniqueChatsMap.set(chat.id, chat)
+      })
+
+      const uniqueChats = Array.from(uniqueChatsMap.values())
+
+      // Khởi tạo List, luôn ưu tiên draft lên đầu
+      setChatList(sortChats(uniqueChats))
+    } catch (error) {
+      console.error('Lỗi khi tải danh sách:', error)
+    } finally {
+      setIsLoading(false)
+    }
+  }, [profile, sortChats])
+
+  useEffect(() => {
+    fetchChats()
+  }, [fetchChats, refetchTrigger])
+
+  // --- 2. LẮNG NGHE SỰ KIỆN DRAFT THAY ĐỔI TỪ CHAT FOOTER ---
+  useEffect(() => {
+    const handleDraftUpdate = (e: any) => {
+      const { convId, content } = e.detail
+      setChatList((prevChats) => {
+        const updatedChats = prevChats.map((chat) => {
+          if (String(chat.id) === String(convId)) {
+            return { ...chat, draftContent: content }
+          }
+          return chat
+        })
+        // Cứ mỗi khi nháp thay đổi, sort lại để đưa lên đầu hoặc trả về vị trí cũ
+        return sortChats(updatedChats)
+      })
+    }
+
+    window.addEventListener('draft_updated', handleDraftUpdate)
+    return () => window.removeEventListener('draft_updated', handleDraftUpdate)
+  }, [sortChats])
+
+  // --- 3. LẮNG NGHE SOCKET REALTIME ---
+  useEffect(() => {
+    if (!profile || !socket) return
+
+    const handleReceiveMessage = (newMessage: any) => {
+      setChatList((prevChats) => {
+        const convIdStr = String(newMessage.conversationId)
+        const existingChatIndex = prevChats.findIndex((c) => String(c.id) === convIdStr)
+        const updatedChats = [...prevChats]
+
+        const senderIdStr = String(newMessage.sender?._id || newMessage.senderId)
+        const isMe = senderIdStr === String(profile._id)
+        let prefix = isMe ? 'Bạn: ' : ''
+        if (!isMe && newMessage.type === 'group') {
+          prefix = `${newMessage.sender?.userName || newMessage.sender?.fullName || 'Thành viên'}: `
+        }
+
+        if (newMessage.type === 'system') {
+          prefix = ''
+        }
+
+        let previewContent = newMessage.content
+        if (newMessage.type === 'revoked') {
+          previewContent = 'Tin nhắn đã được thu hồi'
+          prefix = ''
+        } else if (
+          newMessage.type === 'image' ||
+          newMessage.type === 'media' ||
+          newMessage.content?.match(/\.(jpg|jpeg|png|gif|webp)(\?.*)?$/i)
+        ) {
+          previewContent = '[Hình ảnh]'
+        } else if (newMessage.type === 'video' || newMessage.content?.match(/\.(mp4|mov)(\?.*)?$/i)) {
+          previewContent = '[Video]'
+        } else if (newMessage.type === 'file') {
+          previewContent = '[Tệp đính kèm]'
+        } else if (newMessage.type === 'call') {
+          previewContent = '[Cuộc gọi]'
+        } else if (newMessage.type === 'sticker') {
+          previewContent = '[Nhãn dán]'
+        } else if (newMessage.type === 'system') {
+          prefix = ''
+        }
+
+        const newTime = new Date(newMessage.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+
+        if (existingChatIndex !== -1) {
+          const chatToUpdate = { ...updatedChats[existingChatIndex] }
+          chatToUpdate.message = previewContent // Chỉ lưu ciphertext
+          chatToUpdate.senderPrefix = prefix // Lưu prefix riêng
+          chatToUpdate.isE2E = newMessage.isE2E || false // Cập nhật E2E state
+          chatToUpdate.encryptedKeys = newMessage.encryptedKeys || {} // Cập nhật keys
+          chatToUpdate.time = newTime
+          chatToUpdate.timestamp = new Date(newMessage.createdAt).getTime()
+
+          const isCurrentlyViewing = String(activeChatRef.current?.id) === convIdStr
+          if (!isMe) {
+            if (isCurrentlyViewing) {
+              conversationsApi.markAsSeen(convIdStr).catch((err) => console.error(err))
+            } else {
+              chatToUpdate.unreadCount = (chatToUpdate.unreadCount || 0) + 1
+            }
+          }
+
+          updatedChats.splice(existingChatIndex, 1)
+          updatedChats.push(chatToUpdate)
+          return sortChats(updatedChats)
+        } else {
+          setRefetchTrigger((prev) => prev + 1)
+          return prevChats
+        }
+      })
+    }
+
+    const handleMessageRevoked = ({ messageId, conversationId }: { messageId: string; conversationId: string }) => {
+      setChatList((prevChats) => {
+        return prevChats.map((chat) => {
+          if (String(chat.id) === String(conversationId) && String(chat.lastMessageId) === String(messageId)) {
+            return { ...chat, message: 'Tin nhắn đã được thu hồi', senderPrefix: '' }
+          }
+          return chat
+        })
+      })
+    }
+
+    const handleUserStatusChange = (data: { userId: string; isOnline: boolean; lastActiveAt?: string }) => {
+      setChatList((prevChats) =>
+        prevChats.map((chat) => {
+          const hasUser = chat.participants?.some((p: any) => String(p._id) === String(data.userId))
+          if (hasUser) {
+            const updatedParticipants = chat.participants.map((p: any) =>
+              String(p._id) === String(data.userId)
+                ? { ...p, isOnline: data.isOnline, last_active_at: data.lastActiveAt || p.last_active_at }
+                : p
+            )
+            let updatedIsOnline = chat.isOnline
+            if (chat.type === 'direct') {
+              const otherUser = updatedParticipants.find((p: any) => String(p._id) !== String(profile._id))
+              if (otherUser) {
+                updatedIsOnline = otherUser.isOnline === true
+              }
+            }
+            return {
+              ...chat,
+              isOnline: updatedIsOnline,
+              lastActiveAt: data.lastActiveAt || chat.lastActiveAt,
+              participants: updatedParticipants
+            }
+          }
+          return chat
+        })
+      )
+    }
+
+    const handleConvUpdated = ({ conversationId, name }: { conversationId: string; name: string }) => {
+      setChatList((prev) => prev.map((c) => (c.id === conversationId ? { ...c, name } : c)))
+      setActiveChat((prev) => {
+        if (prev && prev.id === conversationId) {
+          return { ...prev, name }
+        }
+        return prev
+      })
+    }
+
+    const handleUnfriended = (data: { conversationId: string; unfrienderId: string }) => {
+      if (String(data.unfrienderId) !== String(profile._id)) {
+        toast.warning('Cập nhật trạng thái bạn bè', {
+          description: 'Người này đã hủy kết bạn với bạn. Tính năng nhắn tin & gọi điện đã bị khóa.'
+        })
+      }
+
+      setChatList((prev) =>
+        prev.map((chat) => (String(chat.id) === String(data.conversationId) ? { ...chat, isFriend: false } : chat))
+      )
+
+      setActiveChat((prev: any) =>
+        prev && String(prev.id) === String(data.conversationId) ? { ...prev, isFriend: false } : prev
+      )
+    }
+
+    const handleGroupDisbanded = (data: { conversationId: string; message: string }) => {
+      toast.warning('Nhóm đã bị giải tán', {
+        description: data.message || 'Nhóm trưởng đã giải tán nhóm này.'
+      })
+
+      setChatList((prev) =>
+        prev.map((chat) =>
+          String(chat.id) === String(data.conversationId) ? { ...chat, is_disbanded: true, isDisbanded: true } : chat
+        )
+      )
+
+      setActiveChat((prev: any) =>
+        prev && String(prev.id) === String(data.conversationId) ? { ...prev, isDisbanded: true } : prev
+      )
+    }
+
+    const handleFriendAdded = (data: { conversationId: string }) => {
+      setChatList((prev) =>
+        prev.map((chat) => (String(chat.id) === String(data.conversationId) ? { ...chat, isFriend: true } : chat))
+      )
+
+      setActiveChat((prev: any) =>
+        prev && String(prev.id) === String(data.conversationId) ? { ...prev, isFriend: true } : prev
+      )
+    }
+
+    const handleNewConversation = (newConv: any) => {
+      setChatList((prev) => {
+        const exists = prev.find((c) => String(c.id) === String(newConv._id))
+        if (exists) return prev
+
+        fetchChats()
+        return prev
+      })
+    }
+
+    const handleCallIncoming = (data: { callId: string; conversationId: string; callerId: string; type: string }) => {
+      const activeCallData = {
+        callId: data.callId,
+        conversationId: data.conversationId,
+        type: data.type,
+        status: 'initiated',
+        callerId: data.callerId
+      }
+      setChatList((prevChats) =>
+        prevChats.map((chat) => {
+          if (String(chat.id) === String(data.conversationId)) {
+            return { ...chat, activeCall: activeCallData }
+          }
+          return chat
+        })
+      )
+      setActiveChat((prev: any) => {
+        if (prev && String(prev.id) === String(data.conversationId)) {
+          return { ...prev, activeCall: activeCallData }
+        }
+        return prev
+      })
+    }
+
+    const handleCallEnded = (data: { callId: string }) => {
+      setChatList((prevChats) =>
+        prevChats.map((chat) => {
+          if (chat.activeCall && String(chat.activeCall.callId) === String(data.callId)) {
+            return { ...chat, activeCall: null }
+          }
+          return chat
+        })
+      )
+      setActiveChat((prev: any) => {
+        if (prev && prev.activeCall && String(prev.activeCall.callId) === String(data.callId)) {
+          return { ...prev, activeCall: null }
+        }
+        return prev
+      })
+    }
+
+    const handleCallAccepted = (data: { callId: string; conversationId: string }) => {
+      setChatList((prevChats) =>
+        prevChats.map((chat) => {
+          if (String(chat.id) === String(data.conversationId)) {
+            const currentCall = chat.activeCall || {
+              callId: data.callId,
+              conversationId: data.conversationId,
+              status: 'ongoing'
+            }
+            return { ...chat, activeCall: { ...currentCall, status: 'ongoing' } }
+          }
+          return chat
+        })
+      )
+      setActiveChat((prev: any) => {
+        if (prev && String(prev.id) === String(data.conversationId)) {
+          const currentCall = prev.activeCall || {
+            callId: data.callId,
+            conversationId: data.conversationId,
+            status: 'ongoing'
+          }
+          return { ...prev, activeCall: { ...currentCall, status: 'ongoing' } }
+        }
+        return prev
+      })
+    }
+
+    socket.on('conversation_updated', handleConvUpdated)
+    socket.on('receive_message', handleReceiveMessage)
+    socket.on('message_revoked', handleMessageRevoked)
+    socket.on('user_status_change', handleUserStatusChange)
+    socket.on('unfriended', handleUnfriended)
+    socket.on('group_disbanded', handleGroupDisbanded)
+    socket.on('friend_added', handleFriendAdded)
+    socket.on('new_conversation', handleNewConversation)
+    socket.on('call:incoming', handleCallIncoming)
+    socket.on('call:ended', handleCallEnded)
+    socket.on('call:accepted', handleCallAccepted)
+    return () => {
+      socket.off('receive_message', handleReceiveMessage)
+      socket.off('message_revoked', handleMessageRevoked)
+      socket.off('user_status_change', handleUserStatusChange)
+      socket.off('conversation_updated', handleConvUpdated)
+      socket.off('unfriended', handleUnfriended)
+      socket.off('group_disbanded', handleGroupDisbanded)
+      socket.off('friend_added', handleFriendAdded)
+      socket.off('new_conversation', handleNewConversation)
+      socket.off('call:incoming', handleCallIncoming)
+      socket.off('call:ended', handleCallEnded)
+      socket.off('call:accepted', handleCallAccepted)
+    }
+  }, [profile, socket, sortChats])
+
+  // --- 4. ĐỒNG BỘ TRẠNG THÁI ---
+  useEffect(() => {
+    if (activeChat) {
+      const currentInList = chatList.find((c) => String(c.id) === String(activeChat.id))
+      if (
+        currentInList &&
+        (currentInList.isOnline !== activeChat.isOnline || currentInList.lastActiveAt !== activeChat.lastActiveAt)
+      ) {
+        setActiveChat((prev) => {
+          if (!prev) return prev
+          if (prev.isOnline === currentInList.isOnline && prev.lastActiveAt === currentInList.lastActiveAt) return prev
+          return {
+            ...prev,
+            isOnline: currentInList.isOnline,
+            lastActiveAt: currentInList.lastActiveAt
+          }
+        })
+      }
+    }
+  }, [chatList, activeChat, setActiveChat])
+
+  // --- LẮNG NGHE SỰ KIỆN XÓA TIN NHẮN PHÍA TÔI ---
+  useEffect(() => {
+    const handleLocalDelete = (e: any) => {
+      const { conversationId, newLastMessage } = e.detail
+
+      setChatList((prevChats) =>
+        prevChats.map((chat) => {
+          if (String(chat.id) === String(conversationId)) {
+            if (!newLastMessage) {
+              return { ...chat, message: 'Chưa có tin nhắn nào...', time: '', lastMessageId: null }
+            }
+
+            const isMe = newLastMessage.sender?._id === profile?._id
+            let prefix = isMe ? 'Bạn: ' : ''
+            if (!isMe && chat.type === 'group') {
+              prefix = `${newLastMessage.sender?.userName || 'Thành viên'}: `
+            }
+
+            let previewContent = newLastMessage.content
+            if (newLastMessage.type === 'revoked') {
+              previewContent = 'Tin nhắn đã được thu hồi'
+              prefix = ''
+            } else if (
+              newLastMessage.type === 'image' ||
+              newLastMessage.type === 'media' ||
+              newLastMessage.content?.match(/\.(jpg|jpeg|png|gif|webp)(\?.*)?$/i)
+            ) {
+              previewContent = '[Hình ảnh]'
+            } else if (newLastMessage.type === 'video' || newLastMessage.content?.match(/\.(mp4|mov)(\?.*)?$/i)) {
+              previewContent = '[Video]'
+            } else if (newLastMessage.type === 'file') {
+              previewContent = '[Tệp đính kèm]'
+            } else if (newLastMessage.type === 'call') {
+              previewContent = '[Cuộc gọi]'
+            } else if (newLastMessage.type === 'sticker') {
+              previewContent = '[Nhãn dán]'
+            } else if (newLastMessage.type === 'system') {
+              prefix = ''
+            }
+
+            const newTime = new Date(newLastMessage.createdAt).toLocaleTimeString([], {
+              hour: '2-digit',
+              minute: '2-digit'
+            })
+
+            return {
+              ...chat,
+              message: previewContent,
+              senderPrefix: newLastMessage.type === 'revoked' ? '' : prefix,
+              isE2E: newLastMessage.isE2E || false,
+              encryptedKeys: newLastMessage.encryptedKeys || {},
+              time: newTime,
+              lastMessageId: newLastMessage._id
+            }
+          }
+          return chat
+        })
+      )
+    }
+
+    window.addEventListener('local_message_deleted', handleLocalDelete)
+    return () => window.removeEventListener('local_message_deleted', handleLocalDelete)
+  }, [profile])
+
+  useEffect(() => {
+    const handleConversationDeleted = (e: any) => {
+      const { conversationId } = e.detail
+
+      // 1. Gỡ hội thoại khỏi danh sách Sidebar ngay lập tức
+      setChatList((prevChats) => prevChats.filter((chat) => String(chat.id) !== String(conversationId)))
+
+      // 2. Nếu đang mở đúng hội thoại vừa xóa thì clear activeChat
+      if (String(activeChatRef.current?.id) === String(conversationId)) {
+        setActiveChat(null)
+      }
+    }
+
+    window.addEventListener('conversation_deleted', handleConversationDeleted)
+    return () => window.removeEventListener('conversation_deleted', handleConversationDeleted)
+  }, [setActiveChat])
+
+  useEffect(() => {
+    const handleRefresh = () => {
+      fetchChats()
+    }
+    window.addEventListener('refresh_chat_list', handleRefresh)
+    return () => window.removeEventListener('refresh_chat_list', handleRefresh)
+  }, [fetchChats])
+
+  const hasUnreadMessages = useMemo(() => {
+    return chatList.some((chat) => chat.unreadCount > 0)
+  }, [chatList])
+
+  useEffect(() => {
+    setChatList((prevChats) => {
+      if (prevChats.length === 0) return prevChats
+
+      // Kiểm tra xem có cần thiết phải sort lại không.
+      // Chỉ sort lại nếu có ít nhất 1 cuộc trò chuyện có bản nháp.
+      // Điều này giúp tiết kiệm tài nguyên và chống giật khi user chỉ đơn thuần click qua lại các chat bình thường.
+      const hasAnyDrafts = prevChats.some((c) => c.draftContent)
+      if (!hasAnyDrafts) return prevChats
+
+      // Nếu có nháp, thực hiện sort (mảng mới)
+      return sortChats([...prevChats])
+    })
+  }, [activeChat, sortChats])
+
+  return {
+    chatList,
+    setChatList,
+    isLoading,
+    hasUnreadMessages,
+    profile,
+    activeChat,
+    setActiveChat,
+    fetchChats
+  }
+}

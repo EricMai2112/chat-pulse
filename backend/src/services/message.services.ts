@@ -1,0 +1,709 @@
+import { ObjectId } from 'mongodb'
+import databaseService from '~/services/database.services'
+import { ErrorWithStatus } from '~/models/errors'
+import httpStatus from '~/constants/httpStatus'
+import Message from '~/models/schemas/message.schema'
+import socketService from './socket.services'
+import aiService from './ai/ai.service'
+import { ContextManager } from './ai/context.manager'
+import { extractTextFromUrl, extractPlainTextFromUrl } from '~/utils/fileExtractor'
+import summarizeService from './ai/summarize.service'
+
+const replyToLookupStages = [
+  {
+    $lookup: {
+      from: 'messages',
+      localField: 'replyToId',
+      foreignField: '_id',
+      as: 'replyToMessageInfo'
+    }
+  },
+  {
+    $lookup: {
+      from: 'users',
+      localField: 'replyToMessageInfo.senderId',
+      foreignField: '_id',
+      as: 'replyToSenderInfo'
+    }
+  }
+]
+
+const replyToMessageProjection = {
+  $cond: {
+    if: { $gt: [{ $size: { $ifNull: ['$replyToMessageInfo', []] } }, 0] },
+    then: {
+      _id: { $toString: { $arrayElemAt: ['$replyToMessageInfo._id', 0] } },
+      content: { $arrayElemAt: ['$replyToMessageInfo.content', 0] },
+      type: { $arrayElemAt: ['$replyToMessageInfo.type', 0] },
+      senderName: {
+        $ifNull: [{ $arrayElemAt: ['$replyToSenderInfo.userName', 0] }, 'Người dùng']
+      }
+    },
+    else: '$$REMOVE' // Loại bỏ hoàn toàn field này khỏi kết quả nếu không phải tin nhắn reply
+  }
+}
+
+// 2. PROJECT CHO TIN NHẮN GỐC
+const messageProjection = {
+  _id: 1,
+  conversationId: 1,
+  type: 1,
+  content: 1,
+  isEdited: 1,
+  isDeleted: 1,
+  replyToId: 1,
+  reactions: 1,
+  callInfo: 1,
+  createdAt: 1,
+  updatedAt: 1,
+  status: 1,
+  deliveredTo: 1,
+  seenBy: 1,
+  sender: {
+    _id: '$senderInfo._id',
+    userName: '$senderInfo.userName',
+    avatar: '$senderInfo.avatar'
+  },
+  replyToMessage: replyToMessageProjection
+}
+
+class MessageService {
+  async getMessages(conversationId: string, userId: string, cursor?: string, limit: number = 20) {
+    const convObjectId = new ObjectId(conversationId)
+    const userObjectId = new ObjectId(userId)
+
+    const conversation = await databaseService.conversations.findOne({ _id: convObjectId })
+    if (!conversation)
+      throw new ErrorWithStatus({ message: 'Không tìm thấy cuộc hội thoại', status: httpStatus.NOT_FOUND })
+
+    let userMember = conversation.members?.find(
+      (member: any) => member.userId?.toString() === userId || member.user_id?.toString() === userId
+    )
+    if (!userMember && conversation.participants) {
+      if (conversation.participants.some((p: ObjectId) => p.toString() === userId)) {
+        userMember = { userId: new ObjectId(userId), role: 'member' }
+      }
+    }
+    if (!userMember) throw new ErrorWithStatus({ message: 'Bạn không có quyền', status: httpStatus.FORBIDDEN })
+
+    const matchCondition: any = {
+      conversationId: convObjectId,
+      $and: [{ deletedByUsers: { $ne: userObjectId } }, { deleted_by_users: { $ne: userObjectId } }]
+    }
+    if (userMember.clearedHistoryAt) matchCondition.createdAt = { $gt: userMember.clearedHistoryAt }
+    if (cursor) matchCondition._id = { $lt: new ObjectId(cursor) }
+
+    const messages = await databaseService.messages
+      .aggregate([
+        { $match: matchCondition },
+        { $sort: { createdAt: -1 } },
+        { $limit: limit },
+        { $lookup: { from: 'users', localField: 'senderId', foreignField: '_id', as: 'senderInfo' } },
+        { $unwind: '$senderInfo' },
+        ...replyToLookupStages,
+        { $project: messageProjection }
+      ])
+      .toArray()
+    return messages
+  }
+
+  // Tiện ích chạy ngầm để tránh Timeout khi gửi File
+  private async backgroundExtractMediaText(messageId: ObjectId, content: string) {
+    try {
+      let fileUrl = ''
+      try {
+        const parsedContent = JSON.parse(content)
+        fileUrl = Array.isArray(parsedContent) ? parsedContent[0]?.url : parsedContent.url
+      } catch {
+        fileUrl = content
+      }
+
+      if (fileUrl && fileUrl.startsWith('http')) {
+        const result = await extractTextFromUrl(fileUrl)
+        if (result.text) {
+          // Cập nhật ngầm text vào Database sau khi đọc xong
+          await databaseService.messages.updateOne({ _id: messageId }, { $set: { extractedText: result.text } })
+        }
+      }
+    } catch (error) {
+      console.error(`[Background Task] Lỗi trích xuất chữ từ tin nhắn ${messageId}:`, error)
+    }
+  }
+
+  async sendMessage(
+    userId: string,
+    convId: string,
+    type: 'text' | 'sticker' | 'system' | 'media',
+    content: string,
+    replyToId?: string
+  ) {
+    const userObjectId = new ObjectId(userId)
+    const convObjectId = new ObjectId(convId)
+
+    const conversation = await databaseService.conversations.findOne({ _id: convObjectId })
+    if (!conversation) throw new ErrorWithStatus({ message: 'Không tìm thấy', status: httpStatus.NOT_FOUND })
+
+    if (conversation.is_disbanded && type !== 'system') {
+      throw new ErrorWithStatus({ message: 'Nhóm này đã bị giải tán.', status: httpStatus.FORBIDDEN })
+    }
+
+    if (conversation.type === 'direct' && conversation.participants) {
+      const otherUserId = conversation.participants.find((p: ObjectId) => p.toString() !== userId)
+      if (otherUserId) {
+        const isBlockedByReceiver = await databaseService.user_blocks.findOne({
+          user_id: new ObjectId(otherUserId),
+          blocked_user_id: userObjectId
+        })
+        const isFriend = await databaseService.friends.findOne({
+          $or: [
+            { user_id: userObjectId, friend_id: new ObjectId(otherUserId) },
+            { user_id: new ObjectId(otherUserId), friend_id: userObjectId }
+          ]
+        })
+        if (!isFriend)
+          throw new ErrorWithStatus({ message: 'Hai bạn hiện không còn là bạn bè.', status: httpStatus.FORBIDDEN })
+        if (isBlockedByReceiver)
+          throw new ErrorWithStatus({ message: 'Người dùng không nhận tin nhắn.', status: httpStatus.FORBIDDEN })
+
+        const isBlockedBySender = await databaseService.user_blocks.findOne({
+          user_id: userObjectId,
+          blocked_user_id: new ObjectId(otherUserId)
+        })
+        if (isBlockedBySender)
+          throw new ErrorWithStatus({ message: 'Bạn cần bỏ chặn để trò chuyện.', status: httpStatus.FORBIDDEN })
+      }
+    }
+
+    // FIX LỖI: Xử lý an toàn cho trường hợp replyToId bị truyền lên chuỗi "null" hoặc rỗng
+    let safeReplyToId: ObjectId | undefined = undefined
+    if (replyToId && replyToId !== 'null' && replyToId !== 'undefined' && replyToId.trim() !== '') {
+      safeReplyToId = new ObjectId(replyToId)
+    }
+
+    // LƯU TIN NHẮN NGAY LẬP TỨC ĐỂ TRẢ VỀ FRONTEND MÀ KHÔNG BỊ TREO/TIMEOUT
+    const newMessage = new Message({
+      conversationId: convObjectId,
+      senderId: userObjectId,
+      type,
+      content: content,
+      replyToId: safeReplyToId,
+      status: 'SENT'
+    })
+
+    const insertResult = await databaseService.messages.insertOne(newMessage)
+    const messageId = insertResult.insertedId
+
+    // KÍCH HOẠT TIẾN TRÌNH CHẠY NGẦM ĐỌC FILE (Fire & Forget - Không await)
+    const mediaTypes = ['media', 'file', 'image']
+    if (mediaTypes.includes(type as string)) {
+      this.backgroundExtractMediaText(messageId, content).catch(console.error)
+    }
+
+    await databaseService.conversations.updateOne(
+      { _id: convObjectId },
+      { $set: { last_message_id: messageId, updated_at: new Date(), deletedByUsers: [] } }
+    )
+
+    await databaseService.conversations.updateOne(
+      { _id: convObjectId, 'members.userId': userObjectId },
+      { $set: { 'members.$.lastViewedMessageId': messageId } }
+    )
+
+    const messages = await databaseService.messages
+      .aggregate([
+        { $match: { _id: messageId } },
+        { $lookup: { from: 'users', localField: 'senderId', foreignField: '_id', as: 'senderInfo' } },
+        { $unwind: '$senderInfo' },
+        ...replyToLookupStages,
+        { $project: messageProjection }
+      ])
+      .toArray()
+
+    const populatedMessage = messages[0]
+
+    const targetUserIds = new Set<string>()
+    if (conversation.participants) conversation.participants.forEach((p: ObjectId) => targetUserIds.add(p.toString()))
+    if (conversation.members)
+      conversation.members.forEach((m: any) => {
+        const mId = m.userId?.toString() || m.user_id?.toString()
+        if (mId) targetUserIds.add(mId)
+      })
+
+    targetUserIds.forEach((id) => {
+      socketService.emitToUser(id, 'receive_message', populatedMessage)
+    })
+
+    return populatedMessage
+  }
+  async editMessage(messageId: string, userId: string, newContent: string) {
+    const result = await databaseService.messages.findOneAndUpdate(
+      { _id: new ObjectId(messageId), senderId: new ObjectId(userId) },
+      { $set: { content: newContent, isEdited: true, updatedAt: new Date() } },
+      { returnDocument: 'after' }
+    )
+    return result
+  }
+
+  async recallMessage(messageId: string, userId: string) {
+    const result = await databaseService.messages.findOneAndUpdate(
+      { _id: new ObjectId(messageId), senderId: new ObjectId(userId) },
+      { $set: { isDeleted: true, updatedAt: new Date() } },
+      { returnDocument: 'after' }
+    )
+    return result
+  }
+
+  async reactMessage(messageId: string, userId: string, emoji: string) {
+    const messageObjId = new ObjectId(messageId)
+    const userObjId = new ObjectId(userId)
+
+    const [message, user] = await Promise.all([
+      databaseService.messages.findOne({ _id: messageObjId }),
+      databaseService.users.findOne({ _id: userObjId })
+    ])
+
+    if (!message) throw new ErrorWithStatus({ message: 'Tin nhắn không tồn tại', status: 404 })
+    if (!user) throw new ErrorWithStatus({ message: 'User không tồn tại', status: 404 })
+
+    let updateQuery: any = {}
+
+    if (emoji === 'REMOVE_ALL') {
+      updateQuery = {
+        $pull: {
+          reactions: {
+            $or: [{ user_id: { $in: [userObjId, userId] } }, { userId: { $in: [userObjId, userId] } }]
+          }
+        }
+      }
+    } else {
+      updateQuery = {
+        $push: {
+          reactions: {
+            user_id: userObjId,
+            emoji: emoji,
+            user: { _id: user._id, userName: user.userName, avatar: user.avatar },
+            createdAt: new Date()
+          }
+        }
+      }
+    }
+
+    const result = await databaseService.messages.findOneAndUpdate({ _id: messageObjId }, updateQuery, {
+      returnDocument: 'after'
+    })
+    const updatedReactions = result?.reactions || result?.value?.reactions || []
+
+    const conversation = await databaseService.conversations.findOne({ _id: message.conversationId })
+    if (conversation) {
+      const targetUserIds = new Set<string>()
+
+      if (conversation.participants) {
+        conversation.participants.forEach((p: ObjectId) => targetUserIds.add(p.toString()))
+      }
+      if (conversation.members) {
+        conversation.members.forEach((m: any) => {
+          const mId = m.userId?.toString() || m.user_id?.toString()
+          if (mId) targetUserIds.add(mId)
+        })
+      }
+
+      targetUserIds.forEach((id) => {
+        socketService.emitToUser(id, 'message_reacted', {
+          messageId: messageId,
+          reactions: updatedReactions
+        })
+      })
+    }
+    return result
+  }
+
+  async revokeMessage(messageId: string, userId: string) {
+    const messageObjId = new ObjectId(messageId)
+
+    const result = await databaseService.messages.findOneAndUpdate(
+      { _id: messageObjId, senderId: new ObjectId(userId) },
+      { $set: { content: '', type: 'revoked', reactions: [], updatedAt: new Date() } },
+      { returnDocument: 'after' }
+    )
+
+    if (!result) throw new ErrorWithStatus({ message: 'Không thể thu hồi tin nhắn này', status: 403 })
+
+    const updatedMessage = result.value || result
+
+    const conversation = await databaseService.conversations.findOne({ _id: updatedMessage.conversationId })
+    if (conversation) {
+      const targetUserIds = new Set<string>()
+      if (conversation.participants) {
+        conversation.participants.forEach((p: ObjectId) => targetUserIds.add(p.toString()))
+      }
+      if (conversation.members) {
+        conversation.members.forEach((m: any) => {
+          const mId = m.userId?.toString() || m.user_id?.toString()
+          if (mId) targetUserIds.add(mId)
+        })
+      }
+
+      targetUserIds.forEach((id) => {
+        socketService.emitToUser(id, 'message_revoked', {
+          messageId: messageId,
+          conversationId: updatedMessage.conversationId.toString()
+        })
+      })
+    }
+    return result
+  }
+
+  async deleteMessage(messageId: string, userId: string) {
+    const result = await databaseService.messages.findOneAndUpdate(
+      { _id: new ObjectId(messageId) },
+      { $addToSet: { deleted_by_users: new ObjectId(userId) } },
+      { returnDocument: 'after' }
+    )
+    if (!result) throw new Error('Không tìm thấy tin nhắn')
+    return result
+  }
+
+  async deleteMessageForMe(messageId: string, userId: string) {
+    const messageObjId = new ObjectId(messageId)
+    const userObjId = new ObjectId(userId)
+
+    const result = await databaseService.messages.findOneAndUpdate(
+      { _id: messageObjId },
+      { $addToSet: { deletedByUsers: userObjId, deleted_by_users: userObjId } },
+      { returnDocument: 'after' }
+    )
+
+    if (!result) throw new ErrorWithStatus({ message: 'Không tìm thấy tin nhắn', status: 404 })
+    return result
+  }
+
+  async getRecentMessagesForContext(convId: string, userId: string, limit: number) {
+    const convObjectId = new ObjectId(convId)
+    const userObjectId = new ObjectId(userId)
+
+    const matchCondition: any = {
+      conversationId: convObjectId,
+      deletedByUsers: { $ne: userObjectId },
+      isDeleted: { $ne: true }
+    }
+
+    return await databaseService.messages
+      .aggregate([
+        { $match: matchCondition },
+        { $sort: { createdAt: -1 } },
+        { $limit: limit },
+        { $lookup: { from: 'users', localField: 'senderId', foreignField: '_id', as: 'senderInfo' } },
+        { $unwind: '$senderInfo' }
+      ])
+      .toArray()
+  }
+
+  async summarizeConversation(convId: string, userId: string, limit: number = 30, unreadCount: number = 0) {
+    if (unreadCount === 0 || limit === 0) {
+      return { topic: 'Không có tin nhắn mới nào cần tóm tắt', decisions: [], openQuestions: [], actionItems: [] }
+    }
+
+    const conversation = await databaseService.conversations.findOne({ _id: new ObjectId(convId) })
+    if (!conversation) throw new ErrorWithStatus({ message: 'Không tìm thấy', status: 404 })
+
+    const recentMessages = await this.getRecentMessagesForContext(convId, userId, limit)
+
+    if (recentMessages.length === 0) {
+      return { topic: 'Không có tin nhắn mới nào cần tóm tắt', decisions: [], openQuestions: [], actionItems: [] }
+    }
+
+    const chatLog = ContextManager.formatChatLog(recentMessages)
+    return await aiService.summarizeChat(chatLog)
+  }
+
+  async searchMessages(conversationId: string, userId: string, keyword: string, page: number = 1, limit: number = 20) {
+    const convObjectId = new ObjectId(conversationId)
+    const userObjectId = new ObjectId(userId)
+
+    const conversation = await databaseService.conversations.findOne({ _id: convObjectId })
+    if (!conversation) throw new ErrorWithStatus({ message: 'Không tìm thấy hội thoại', status: httpStatus.NOT_FOUND })
+
+    const isMember = (conversation.participants || []).some((p: ObjectId) => p.toString() === userId)
+    if (!isMember) throw new ErrorWithStatus({ message: 'Bạn không có quyền truy cập', status: httpStatus.FORBIDDEN })
+
+    const skip = (page - 1) * limit
+
+    const results = await databaseService.messages
+      .aggregate([
+        {
+          $match: {
+            conversationId: convObjectId,
+            type: 'text',
+            content: { $regex: keyword, $options: 'i' },
+            deletedByUsers: { $ne: userObjectId },
+            deleted_by_users: { $ne: userObjectId },
+            isDeleted: { $ne: true }
+          }
+        },
+        { $sort: { createdAt: -1 } },
+        { $skip: skip },
+        { $limit: limit },
+        { $lookup: { from: 'users', localField: 'senderId', foreignField: '_id', as: 'senderInfo' } },
+        { $unwind: { path: '$senderInfo', preserveNullAndEmptyArrays: true } },
+        {
+          $project: {
+            _id: 1,
+            content: 1,
+            createdAt: 1,
+            type: 1,
+            sender: { _id: '$senderInfo._id', userName: '$senderInfo.userName', avatar: '$senderInfo.avatar' }
+          }
+        }
+      ])
+      .toArray()
+
+    const totalCount = await databaseService.messages.countDocuments({
+      conversationId: convObjectId,
+      type: 'text',
+      content: { $regex: keyword, $options: 'i' },
+      deletedByUsers: { $ne: userObjectId },
+      deleted_by_users: { $ne: userObjectId },
+      isDeleted: { $ne: true }
+    })
+
+    return { results, total: totalCount, page, limit, totalPages: Math.ceil(totalCount / limit) }
+  }
+
+  async markMessageDelivered(messageId: string, userId: string) {
+    const result = await databaseService.messages.findOneAndUpdate(
+      { _id: new ObjectId(messageId) },
+      { $addToSet: { deliveredTo: new ObjectId(userId) }, $set: { status: 'DELIVERED' } },
+      { returnDocument: 'after' }
+    )
+    return result
+  }
+
+  async markMessageSeen(messageId: string, userId: string) {
+    const result = await databaseService.messages.findOneAndUpdate(
+      { _id: new ObjectId(messageId) },
+      { $addToSet: { seenBy: new ObjectId(userId) }, $set: { status: 'SEEN' } },
+      { returnDocument: 'after' }
+    )
+    return result
+  }
+
+  async getGlobalRecentMessagesForUser(userId: string, limitPerConv: number = 10) {
+    const userObjId = new ObjectId(userId)
+
+    const conversations = await databaseService.conversations
+      .find({ $or: [{ participants: userObjId }, { 'members.userId': userObjId }, { 'members.user_id': userObjId }] })
+      .toArray()
+
+    if (!conversations.length) return []
+
+    const recentConvs = conversations
+      .sort((a, b) => {
+        const tA = a.updated_at ? new Date(a.updated_at).getTime() : 0
+        const tB = b.updated_at ? new Date(b.updated_at).getTime() : 0
+        return tB - tA
+      })
+      .slice(0, 10)
+
+    const globalContext = await Promise.all(
+      recentConvs.map(async (conv) => {
+        const msgs = await databaseService.messages
+          .aggregate([
+            {
+              $match: {
+                conversationId: conv._id,
+                deletedByUsers: { $ne: userObjId },
+                deleted_by_users: { $ne: userObjId },
+                isDeleted: { $ne: true },
+                type: 'text'
+              }
+            },
+            { $sort: { createdAt: -1 } },
+            { $limit: limitPerConv },
+            { $lookup: { from: 'users', localField: 'senderId', foreignField: '_id', as: 'senderInfo' } },
+            { $unwind: { path: '$senderInfo', preserveNullAndEmptyArrays: true } }
+          ])
+          .toArray()
+
+        return {
+          conversationName: conv.name || (conv.type === 'group' ? 'Group Chat' : 'Chat 1-1'),
+          conversationId: conv._id.toString(),
+          messages: msgs.reverse()
+        }
+      })
+    )
+
+    return globalContext.filter((c) => c.messages.length > 0)
+  }
+
+  async forwardMessage(originalMessageId: string, userId: string, targetUserIds: string[], targetGroupIds: string[]) {
+    const originalMsg = await databaseService.messages.findOne({ _id: new ObjectId(originalMessageId) })
+    if (!originalMsg) throw new ErrorWithStatus({ message: 'Tin nhắn không tồn tại', status: httpStatus.NOT_FOUND })
+
+    const userObjId = new ObjectId(userId)
+    const forwardedMessages = []
+
+    // 1. Chuyển tiếp vào các Group
+    if (targetGroupIds && targetGroupIds.length > 0) {
+      for (const groupId of targetGroupIds) {
+        // Gọi lại hàm sendMessage để tận dụng logic kiểm tra và bắn Socket
+        const msg = await this.sendMessage(userId, groupId, originalMsg.type as any, originalMsg.content)
+        forwardedMessages.push(msg)
+      }
+    }
+
+    // 2. Chuyển tiếp cho Bạn bè (Chat 1-1)
+    if (targetUserIds && targetUserIds.length > 0) {
+      for (const friendId of targetUserIds) {
+        const friendObjId = new ObjectId(friendId)
+
+        // Tìm cuộc hội thoại 1-1 giữa 2 người
+        let conv = await databaseService.conversations.findOne({
+          type: 'direct',
+          participants: { $all: [userObjId, friendObjId] }
+        })
+
+        // Nếu chưa từng chat, tạo cuộc hội thoại mới
+        if (!conv) {
+          const insertConv = await databaseService.conversations.insertOne({
+            type: 'direct',
+            participants: [userObjId, friendObjId],
+            created_at: new Date(),
+            updated_at: new Date()
+          } as any)
+          conv = { _id: insertConv.insertedId } as any
+        }
+
+        const msg = await this.sendMessage(userId, conv!._id.toString(), originalMsg.type as any, originalMsg.content)
+        forwardedMessages.push(msg)
+      }
+    }
+
+    return forwardedMessages
+  }
+
+  // ──────────────────────────────────────────────────────────────
+  // TÓM TẮT MỘT TIN NHẮN CỤ THỂ (đa định dạng)
+  // ──────────────────────────────────────────────────────────────
+  async summarizeMessage(messageId: string, userId: string) {
+    const message = await databaseService.messages.findOne({ _id: new ObjectId(messageId) })
+    if (!message) throw new ErrorWithStatus({ message: 'Tin nhắn không tồn tại', status: httpStatus.NOT_FOUND })
+
+    // Kiểm tra quyền truy cập
+    const conversation = await databaseService.conversations.findOne({ _id: message.conversationId })
+    if (!conversation)
+      throw new ErrorWithStatus({ message: 'Cuộc hội thoại không tồn tại', status: httpStatus.NOT_FOUND })
+
+    const isMember =
+      (conversation.participants || []).some((p: ObjectId) => p.toString() === userId) ||
+      (conversation.members || []).some((m: any) => m.userId?.toString() === userId || m.user_id?.toString() === userId)
+    if (!isMember) throw new ErrorWithStatus({ message: 'Bạn không có quyền truy cập', status: httpStatus.FORBIDDEN })
+
+    // Gọi SummarizeService với thông tin đầy đủ
+    return await summarizeService.summarizeAuto({
+      type: message.type,
+      content: message.content,
+      fileUrl: undefined // URL sẽ được parse từ content bên trong service
+    })
+  }
+
+  async pinMessage(messageId: string, userId: string, action: 'pin' | 'unpin') {
+    const messageObjId = new ObjectId(messageId)
+    const userObjId = new ObjectId(userId)
+
+    const message = await databaseService.messages.findOne({ _id: messageObjId })
+    if (!message) throw new ErrorWithStatus({ message: 'Tin nhắn không tồn tại', status: 404 })
+
+    const conversation = await databaseService.conversations.findOne({ _id: message.conversationId })
+    if (!conversation) throw new ErrorWithStatus({ message: 'Cuộc hội thoại không tồn tại', status: 404 })
+
+    // 1. Phân quyền (Roles)
+    const isGroup = conversation.type === 'group'
+    let userRole = 'member'
+
+    if (isGroup) {
+      const member = conversation.members?.find(
+        (m: any) => m.userId?.toString() === userId || m.user_id?.toString() === userId
+      )
+      if (!member) throw new ErrorWithStatus({ message: 'Bạn không thuộc nhóm này', status: 403 })
+      userRole = member.role || 'member'
+
+      // Chỉ quản trị viên mới được ghim trong group
+      // if (action === 'pin' && !['admin', 'owner', 'sub_admin'].includes(userRole)) {
+      //   throw new ErrorWithStatus({ message: 'Chỉ Trưởng/Phó nhóm mới có quyền ghim tin nhắn', status: 403 })
+      // }
+    }
+
+    let updatedPinnedMessages = conversation.pinnedMessages || []
+
+    // 2. Logic Ghim / Bỏ Ghim
+    if (action === 'pin') {
+      if (updatedPinnedMessages.length >= 3) {
+        throw new ErrorWithStatus({ message: 'Chỉ được ghim tối đa 3 tin nhắn', status: 400 })
+      }
+      if (updatedPinnedMessages.some((p) => p.messageId.toString() === messageId)) {
+        throw new ErrorWithStatus({ message: 'Tin nhắn này đã được ghim', status: 400 })
+      }
+      updatedPinnedMessages.push({
+        messageId: messageObjId,
+        pinnedBy: userObjId,
+        pinnedAt: new Date()
+      })
+    } else {
+      const pinnedMsg = updatedPinnedMessages.find((p) => p.messageId.toString() === messageId)
+      if (!pinnedMsg) throw new ErrorWithStatus({ message: 'Tin nhắn chưa được ghim', status: 400 })
+
+      // Quyền bỏ ghim: Admin hoặc Chính người đã ghim
+      // if (isGroup && !['admin', 'owner', 'sub_admin'].includes(userRole)) {
+      //   if (pinnedMsg.pinnedBy.toString() !== userId) {
+      //     throw new ErrorWithStatus({ message: 'Chỉ người ghim hoặc Quản trị viên mới được bỏ ghim', status: 403 })
+      //   }
+      // }
+      updatedPinnedMessages = updatedPinnedMessages.filter((p) => p.messageId.toString() !== messageId)
+    }
+
+    // 3. Cập nhật DB
+    await databaseService.conversations.updateOne(
+      { _id: conversation._id },
+      { $set: { pinnedMessages: updatedPinnedMessages } }
+    )
+
+    // 4. Lấy dữ liệu chi tiết của tin nhắn ghim để Frontend render Preview
+    const populatedPinnedMessages = await Promise.all(
+      updatedPinnedMessages.map(async (p) => {
+        const msg = await databaseService.messages.findOne({ _id: p.messageId })
+        const sender = await databaseService.users.findOne({ _id: msg?.senderId })
+        return {
+          ...p,
+          message: {
+            _id: msg?._id,
+            type: msg?.type,
+            content: msg?.content,
+            senderName: sender?.userName || 'Người dùng'
+          }
+        }
+      })
+    )
+
+    // 5. Bắn Socket đồng bộ
+    const targetUserIds = new Set<string>()
+    if (conversation.participants) conversation.participants.forEach((p: ObjectId) => targetUserIds.add(p.toString()))
+    if (conversation.members) {
+      conversation.members.forEach((m: any) => {
+        const mId = m.userId?.toString() || m.user_id?.toString()
+        if (mId) targetUserIds.add(mId)
+      })
+    }
+
+    targetUserIds.forEach((id) => {
+      socketService.emitToUser(id, 'pinned_messages_updated', {
+        conversationId: conversation._id.toString(),
+        pinnedMessages: populatedPinnedMessages
+      })
+    })
+
+    return populatedPinnedMessages
+  }
+}
+
+const messageService = new MessageService()
+export default messageService
