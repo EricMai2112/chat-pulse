@@ -8,7 +8,7 @@ config()
 
 // 1. Khởi tạo AWS SES Client
 const sesClient = new SESClient({
-  region: process.env.AWS_REGION_SES,
+  region: process.env.AWS_REGION,
   credentials: {
     secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY as string,
     accessKeyId: process.env.AWS_ACCESS_KEY_ID as string
@@ -31,7 +31,8 @@ const templatesEmail = fs.readFileSync(path.resolve('src/templates/verify-email.
  */
 const sendEmailCore = async (toAddress: string, subject: string, body: string, provider?: 'ses' | 'nodemailer') => {
   const toAddressClean = toAddress.trim()
-  const useNodemailer = provider === 'nodemailer' || (provider === undefined && process.env.MAIL_USER && process.env.MAIL_PASSWORD)
+  const useNodemailer =
+    provider === 'nodemailer' || (provider === undefined && process.env.MAIL_USER && process.env.MAIL_PASSWORD)
 
   if (useNodemailer) {
     console.log(`[Nodemailer] Đang gửi mail tới ${toAddressClean} bằng Gmail SMTP...`)
