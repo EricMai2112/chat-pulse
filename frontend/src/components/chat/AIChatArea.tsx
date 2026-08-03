@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { ChatHeader } from './ChatHeader'
 import type { ChatItem } from '@/context/app.context'
-import { Send, Bot, Loader2, Copy, Check } from 'lucide-react'
+import { Send, Bot, Loader2, Copy, Check, Mic, Square } from 'lucide-react'
 import { aiApi } from '@/apis/ai.api'
 import { trafficApi } from '@/apis/traffic.api'
 import { TrafficCard } from './TrafficCard'
@@ -101,6 +101,12 @@ export function AIChatArea({ chat, onToggleInfoPanel = () => {}, isInfoPanelOpen
   const [inputText, setInputText] = useState('')
   const [isTyping, setIsTyping] = useState(false)
   const [showSuggestions, setShowSuggestions] = useState(true)
+
+  // ── States cho tính năng Voice Recording ──
+  const [isRecording, setIsRecording] = useState(false)
+  const [isVoiceProcessing, setIsVoiceProcessing] = useState(false)
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+  const audioChunksRef = useRef<Blob[]>([])
 
   useEffect(() => {
     setMessages([
@@ -215,6 +221,107 @@ export function AIChatArea({ chat, onToggleInfoPanel = () => {}, isInfoPanelOpen
         }
       ])
     } finally {
+      setIsTyping(false)
+    }
+  }
+
+  // ── XỬ LÝ VOICE RECORDING ────────────────────────────────────────────────
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      mediaRecorderRef.current = new MediaRecorder(stream)
+      audioChunksRef.current = []
+
+      mediaRecorderRef.current.ondataavailable = (event) => {
+        if (event.data.size > 0) audioChunksRef.current.push(event.data)
+      }
+
+      mediaRecorderRef.current.onstop = async () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' })
+        stream.getTracks().forEach((track) => track.stop()) // Tắt micro
+        await handleSendVoice(audioBlob)
+      }
+
+      mediaRecorderRef.current.start()
+      setIsRecording(true)
+    } catch (err) {
+      console.error('Lỗi mở Micro:', err)
+      alert('Vui lòng cấp quyền Microphone cho trình duyệt để sử dụng Voice Chat!')
+    }
+  }
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop()
+      setIsRecording(false)
+    }
+  }
+
+  const handleSendVoice = async (blob: Blob) => {
+    setIsVoiceProcessing(true)
+    setIsTyping(true)
+    setShowSuggestions(false)
+
+    try {
+      const formData = new FormData()
+      formData.append('audio', blob, 'voice.webm')
+
+      const chatContext = messages.filter((m) => m.id !== 'welcome-msg').map((m) => ({ role: m.role, content: m.text }))
+      formData.append('chatHistory', JSON.stringify(chatContext))
+
+      const res = await (aiApi as any).sendVoiceChat(formData)
+      const { userQuestion, aiReplyText, isVietnamese, audioBase64 } = res.data
+
+      if (userQuestion) {
+        setMessages((prev) => [
+          ...prev,
+          { id: Date.now().toString(), role: 'user', text: userQuestion, timestamp: new Date() }
+        ])
+      }
+
+      if (aiReplyText) {
+        setMessages((prev) => [
+          ...prev,
+          { id: (Date.now() + 1).toString(), role: 'model', text: aiReplyText, timestamp: new Date() }
+        ])
+
+        // PHÁT LOA DỰA TRÊN NGÔN NGỮ
+        if (!isVietnamese && audioBase64) {
+          // 👉 TIẾNG ANH: Giọng AWS Polly Joanna SSML siêu mượt
+          const audio = new Audio(`data:audio/mp3;base64,${audioBase64}`)
+          audio.play().catch((e) => console.error('Lỗi phát AWS Polly audio:', e))
+        } else if ('speechSynthesis' in window) {
+          // 👉 TIẾNG VIỆT: Tự chọn giọng đọc hay nhất của Trình Duyện
+          window.speechSynthesis.cancel()
+
+          // Chèn khoảng nghỉ ngắn cho dấu câu
+          const cleanText = aiReplyText.replace(/[*#_`]/g, '').replace(/([.,!?])/g, '$1 ')
+
+          const utterance = new SpeechSynthesisUtterance(cleanText)
+          utterance.lang = 'vi-VN'
+          utterance.rate = 0.96 // Tốc độ vừa phải
+          utterance.pitch = 1.05 // Cao độ tươi tắn
+
+          // TÌM GIỌNG ĐỌC TIẾNG VIỆT TỰ NHIÊN NHẤT TRÊN THIẾT BỊ
+          const voices = window.speechSynthesis.getVoices()
+          const bestViVoice =
+            voices.find(
+              (v) =>
+                (v.lang.includes('vi') || v.lang.includes('VN')) &&
+                (v.name.includes('Natural') || v.name.includes('Google') || v.name.includes('Online'))
+            ) || voices.find((v) => v.lang.includes('vi') || v.lang.includes('VN'))
+
+          if (bestViVoice) {
+            utterance.voice = bestViVoice
+          }
+
+          window.speechSynthesis.speak(utterance)
+        }
+      }
+    } catch (error: any) {
+      console.error('Lỗi Voice Chat:', error)
+    } finally {
+      setIsVoiceProcessing(false)
       setIsTyping(false)
     }
   }
@@ -357,22 +464,49 @@ export function AIChatArea({ chat, onToggleInfoPanel = () => {}, isInfoPanelOpen
         >
           <textarea
             ref={inputRef}
-            placeholder={config.placeholder}
+            placeholder={isRecording ? 'Đang lắng nghe bạn nói...' : config.placeholder}
             className='w-full bg-transparent text-foreground px-5 py-[10px] outline-none resize-none leading-relaxed text-sm placeholder:text-muted-foreground'
             style={{ minHeight: '44px', height: '44px', maxHeight: '130px' }}
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
             onKeyDown={handleKeyDown}
-            disabled={isTyping}
+            disabled={isTyping || isRecording}
             rows={1}
           />
         </div>
+
+        {/* ── NÚT MICRO VOICE CHAT ── */}
+        <button
+          type='button'
+          onClick={isRecording ? stopRecording : startRecording}
+          disabled={isTyping || isVoiceProcessing}
+          className={`w-11 h-11 rounded-full flex items-center justify-center transition-all duration-200 shadow-md shrink-0 ${
+            isRecording
+              ? 'bg-red-500 text-white animate-pulse ring-4 ring-red-300'
+              : 'bg-muted hover:bg-muted/80 text-foreground border border-border'
+          }`}
+          title={isRecording ? 'Nhấn để dừng và gửi' : 'Bấm để nói chuyện với AI'}
+        >
+          {isVoiceProcessing ? (
+            <Loader2 className='w-5 h-5 animate-spin text-primary' />
+          ) : isRecording ? (
+            <Square className='w-4 h-4 fill-current' />
+          ) : (
+            <Mic className='w-5 h-5' />
+          )}
+        </button>
+
+        {/* ── NÚT SEND ── */}
         <button
           onClick={() => handleSend()}
-          disabled={!inputText.trim() || isTyping}
+          disabled={!inputText.trim() || isTyping || isRecording}
           className={`w-11 h-11 bg-gradient-to-r ${config.themeGradient} text-white rounded-full hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center shadow-md shrink-0`}
         >
-          {isTyping ? <Loader2 className='w-5 h-5 animate-spin' /> : <Send className='w-4 h-4 ml-0.5' />}
+          {isTyping && !isVoiceProcessing ? (
+            <Loader2 className='w-5 h-5 animate-spin' />
+          ) : (
+            <Send className='w-4 h-4 ml-0.5' />
+          )}
         </button>
       </div>
     </div>

@@ -20,6 +20,7 @@ import groupRouter from './routes/group.routes'
 import callRouter from './routes/call.routes'
 import trafficRouter from './routes/traffic.routes'
 import traffic_ragService from './services/ai/traffic_rag.service'
+import aiRouter from './routes/ai.routes'
 const app = express()
 // Kết nối cơ sở dữ liệu và khởi tạo Index
 databaseService.connect().then(async () => {
@@ -49,7 +50,8 @@ app.use(
   })
 )
 
-app.use(express.json()) //parse JSON to body
+app.use(express.json()) // parse JSON to body
+app.use('/uploads', express.static('uploads'))
 app.use('/users', usersRouter)
 app.use('/friends', friendsRouter)
 app.use('/search', searchRouter)
@@ -60,6 +62,7 @@ app.use('/advanced-search', advancedSearchRouter)
 app.use('/groups', groupRouter)
 app.use('/calls', callRouter)
 app.use('/traffic-ai', trafficRouter)
+app.use('/api/ai', aiRouter)
 
 //default global error
 app.use(defaultErrorHandler)

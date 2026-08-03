@@ -7,5 +7,16 @@ export const aiApi = {
       context: chatContext,
       question: prompt
     })
+  },
+  sendVoiceChat: (formData: FormData) => {
+    return http.post<{
+      userQuestion: string
+      aiReplyText: string
+      audioBase64: string
+    }>('/api/ai/voice-chat', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data'
+      }
+    })
   }
 }
