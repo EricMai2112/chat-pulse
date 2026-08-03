@@ -55,7 +55,7 @@ export function LoginForm({ className, ...props }: React.ComponentProps<'div'>) 
       const fetchProfile = async () => {
         try {
           // `https://chatpulse-production-0fe3.up.railway.app/users/me`
-          const response = await axios.get('http://localhost:4000/users/me', {
+          const response = await axios.get(`${import.meta.env.VITE_API_URL}/users/me`, {
             headers: { Authorization: `Bearer ${access_token}` }
           })
 
