@@ -44,6 +44,47 @@ export const isVietnameseText = (text: string): boolean => {
   return true
 }
 
+export const isEnglishText = (text: string): boolean => {
+  if (!text) return false
+  // 1. Nếu chứa bất kỳ dấu Tiếng Việt nào -> Chắc chắn là Tiếng Việt (Không phải Tiếng Anh)
+  const hasVnAccent = /[àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]/i.test(text)
+  if (hasVnAccent) return false
+
+  // 2. Đếm các từ Tiếng Anh phổ biến
+  const enKeywords = [
+    'what',
+    'why',
+    'how',
+    'who',
+    'where',
+    'when',
+    'want',
+    'know',
+    'more',
+    'about',
+    'can',
+    'you',
+    'tell',
+    'me',
+    'is',
+    'are',
+    'aws',
+    'amazon',
+    'service',
+    'services',
+    'hello',
+    'hi'
+  ]
+  const words = text
+    .toLowerCase()
+    .replace(/[^a-z\s]/g, '')
+    .split(/\s+/)
+  const enCount = words.filter((w) => enKeywords.includes(w)).length
+
+  // Nếu có từ 2 từ tiếng Anh trở lên hoặc tỷ lệ từ tiếng Anh cao -> Xác định là Tiếng Anh
+  return enCount >= 2 || (words.length > 0 && enCount / words.length > 0.3)
+}
+
 class AiService {
   private groq: Groq
   private modelName: string
@@ -76,27 +117,27 @@ class AiService {
 
   async textToSpeech(text: string): Promise<Buffer> {
     try {
-      // 1. Làm sạch ký tự markdown
+      // 1. Làm sạch các ký tự markdown
       let cleanText = text
         .replace(/[*#_`]/g, '')
         .trim()
         .substring(0, 1200)
 
-      // 2. Chuyển các dấu câu thành khoảng nghỉ tự nhiên trong SSML
+      // 2. Chèn khoảng nghỉ tự nhiên bằng thẻ <break> (Neural Engine hỗ trợ 100% thẻ break)
       cleanText = cleanText
         .replace(/\.\.\./g, '<break time="300ms"/>')
         .replace(/!/g, '! <break time="150ms"/>')
         .replace(/\?/g, '? <break time="200ms"/>')
 
-      // 3. Dùng thẻ prosody chuẩn (Hỗ trợ 100% cho Neural Engine)
-      const ssmlText = `<speak><prosody rate="102%" pitch="+2%">${cleanText}</prosody></speak>`
+      // 3. SSML chuẩn tương thích tuyệt đối với Neural Engine (Bỏ pitch, chỉ giữ rate nếu cần)
+      const ssmlText = `<speak><prosody rate="102%">${cleanText}</prosody></speak>`
 
       const command = new SynthesizeSpeechCommand({
         OutputFormat: 'mp3',
         Text: ssmlText,
         TextType: 'ssml',
         VoiceId: 'Joanna' as VoiceId,
-        Engine: 'neural' // Vẫn giữ Neural engine để giọng cực kỳ tự nhiên
+        Engine: 'neural'
       })
 
       const response = await this.pollyClient.send(command)
@@ -105,7 +146,7 @@ class AiService {
     } catch (error) {
       console.error('Lỗi Polly SSML, fallback sang Plain Text:', error)
 
-      // Fallback an toàn nếu vẫn có lỗi
+      // Fallback an toàn nếu có bất kỳ lỗi SSML nào khác xảy ra
       const cleanText = text.replace(/[*#_`]/g, '').substring(0, 1000)
       const command = new SynthesizeSpeechCommand({
         OutputFormat: 'mp3',
@@ -121,53 +162,41 @@ class AiService {
 
   async answerQuestion(globalContextString: string, userMetadataString: string, chatHistory: any[], question: string) {
     try {
-      // 1. Kiểm tra ngôn ngữ trực tiếp từ câu hỏi vừa nhận diện được
-      const isVN = isVietnameseText(question)
+      // Kiếm tra ngôn ngữ trực tiếp từ CÂU HỎI người dùng vừa nói
+      const isEn = isEnglishText(question)
 
-      // 2. Ép cứng quy tắc cho Llama: Phải tuân thủ ngôn ngữ của LƯỢT NÓI MỚI NHẤT
-      const langInstruction = isVN
-        ? '\n\n[STRICT LANGUAGE OVERRIDE]: The user asked in VIETNAMESE. You MUST answer strictly in VIETNAMESE. Ignore previous English context if any.'
-        : '\n\n[STRICT LANGUAGE OVERRIDE]: The user asked in ENGLISH. You MUST answer strictly in ENGLISH. Ignore previous Vietnamese context if any.'
+      const langInstruction = isEn
+        ? `\n\n[STRICT LANGUAGE RULE]: The user asked in ENGLISH ("${question}"). You MUST respond entirely in ENGLISH. Do NOT use Vietnamese. Answer directly in 2-3 short sentences.`
+        : `\n\n[QUY TẮC NGÔN NGỮ]: Người dùng hỏi bằng TIẾNG VIỆT. Bạn BẮT BUỘC trả lời hoàn toàn bằng TIẾNG VIỆT. Trả lời ngắn gọn 2-3 câu, đúng trọng tâm.`
 
       const baseInstruction = PromptBuilder.buildSystemInstruction(globalContextString, userMetadataString)
       const systemInstruction = baseInstruction + langInstruction
 
-      const formattedHistory = (chatHistory || [])
-        .map((item: any) => {
-          let contentString = ''
-          if (Array.isArray(item.parts)) {
-            contentString = item.parts.map((p: any) => p.text || '').join('\n')
-          } else if (typeof item.parts === 'string') {
-            contentString = item.parts
-          } else {
-            contentString = String(item.content || item.parts || '')
-          }
-          return {
-            role: item.role === 'model' ? 'assistant' : 'user',
-            content: contentString
-          }
-        })
+      // Chỉ lấy 3 tin nhắn gần nhất để tránh bị "nhiễu" ngôn ngữ cũ
+      const recentHistory = (chatHistory || [])
+        .slice(-3)
+        .map((item: any) => ({
+          role: item.role === 'model' ? 'assistant' : 'user',
+          content: String(item.content || item.parts || '')
+        }))
         .filter((msg: any) => msg.content.trim() !== '')
 
       const messages: any[] = [
         { role: 'system', content: systemInstruction },
-        ...formattedHistory,
+        ...recentHistory,
         { role: 'user', content: question }
       ]
 
       const completion = await this.groq.chat.completions.create({
         model: this.modelName,
         messages: messages,
-        temperature: 0.5 // Hạ bớt temperature để AI tuân thủ System Prompt tốt hơn
+        temperature: 0.3 // Hạ thấp temperature để AI tuân thủ luật ngôn ngữ tuyệt đối
       })
 
       return completion.choices[0]?.message?.content || ''
     } catch (error: any) {
       console.error('Lỗi AiService.answerQuestion:', error)
-      throw new ErrorWithStatus({
-        message: 'AI hiện không thể trả lời. Vui lòng thử lại.',
-        status: httpStatus.INTERNAL_SERVER_ERROR
-      })
+      throw new ErrorWithStatus({ message: 'AI hiện không thể trả lời.', status: 500 })
     }
   }
 }

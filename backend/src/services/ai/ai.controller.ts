@@ -1,29 +1,18 @@
+// Trong ai.controller.ts
 import { Request, Response } from 'express'
-import aiService, { isVietnameseText } from './ai.service'
+import aiService, { isEnglishText } from './ai.service'
 import fs from 'fs'
 
 export const voiceChatController = async (req: Request, res: Response) => {
   const audioFile = req.file
-
-  if (!audioFile) {
-    return res.status(400).json({ message: 'Không nhận được file ghi âm' })
-  }
+  if (!audioFile) return res.status(400).json({ message: 'Không nhận được file ghi âm' })
 
   try {
-    // 1. Groq Whisper dịch âm thanh
     const userQuestion = await aiService.transcribeAudio(audioFile.path)
     if (fs.existsSync(audioFile.path)) fs.unlinkSync(audioFile.path)
 
     console.log('🎙️ [VoiceChat] User Question:', userQuestion)
 
-    const hallucinations = ['subscribe', 'ghiền mì gõ', 'cảm ơn đã xem', 'like và share']
-    const isHallucination = hallucinations.some((h) => userQuestion.toLowerCase().includes(h))
-
-    if (!userQuestion || !userQuestion.trim() || isHallucination) {
-      return res.status(400).json({ message: 'Không nghe rõ, vui lòng thử lại!' })
-    }
-
-    // 2. Lấy câu trả lời từ AI
     let chatHistory = []
     try {
       chatHistory = JSON.parse(req.body.chatHistory || '[]')
@@ -31,18 +20,20 @@ export const voiceChatController = async (req: Request, res: Response) => {
       chatHistory = []
     }
 
+    // 1. AI sinh câu trả lời (Đã được ép đúng ngôn ngữ từ Prompt)
     const aiReplyText = await aiService.answerQuestion('', '', chatHistory, userQuestion)
     console.log('🤖 [VoiceChat] AI Reply Text:', aiReplyText)
 
-    // 3. Phân loại ngôn ngữ của CÂU TRẢ LỜI thực tế
-    const isVN = isVietnameseText(aiReplyText)
+    // 2. Kiểm tra xem câu trả lời là Tiếng Anh hay Tiếng Việt
+    const isEnglish = isEnglishText(aiReplyText) || isEnglishText(userQuestion)
+    const isVN = !isEnglish
+
     console.log('🌐 [VoiceChat] Is Vietnamese?:', isVN)
 
     let audioBase64 = null
-
-    // Nếu KHÔNG PHẢI Tiếng Việt (tức là Tiếng Anh) -> Gọi AWS Polly tạo audio MP3
-    if (!isVN) {
-      console.log('🔊 [VoiceChat] Đang gọi AWS Polly Joanna...')
+    // Nếu là Tiếng Anh -> Gọi AWS Polly Joanna phát âm chuẩn Native
+    if (isEnglish) {
+      console.log('🔊 [VoiceChat] Gọi AWS Polly Joanna (English)...')
       const audioBuffer = await aiService.textToSpeech(aiReplyText)
       audioBase64 = audioBuffer.toString('base64')
     }
@@ -54,7 +45,6 @@ export const voiceChatController = async (req: Request, res: Response) => {
       audioBase64
     })
   } catch (error: any) {
-    console.error('Lỗi Voice Chat Backend:', error)
     if (audioFile && fs.existsSync(audioFile.path)) fs.unlinkSync(audioFile.path)
     return res.status(500).json({ message: 'Lỗi máy chủ khi xử lý Voice AI' })
   }

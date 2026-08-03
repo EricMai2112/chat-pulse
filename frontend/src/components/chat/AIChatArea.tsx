@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { ChatHeader } from './ChatHeader'
 import type { ChatItem } from '@/context/app.context'
-import { Send, Bot, Loader2, Copy, Check, Mic, Square } from 'lucide-react'
+import { Send, Bot, Loader2, Copy, Check, Mic, PhoneOff, Volume2, Square } from 'lucide-react'
 import { aiApi } from '@/apis/ai.api'
 import { trafficApi } from '@/apis/traffic.api'
 import { TrafficCard } from './TrafficCard'
@@ -24,7 +24,6 @@ interface AIMessage {
   isError?: boolean
 }
 
-// ── Quick suggestions (đồng bộ với mobile) ─────────────────────────────────
 const TRAFFIC_SUGGESTIONS = [
   { icon: '🚗', label: 'Tốc độ tối đa đường cao tốc' },
   { icon: '🍺', label: 'Nồng độ cồn khi lái xe' },
@@ -34,7 +33,6 @@ const TRAFFIC_SUGGESTIONS = [
   { icon: '🅿️', label: 'Đỗ xe sai quy định phạt thế nào?' }
 ]
 
-// ── Traffic Bot Avatar — đồng bộ với mobile ────────────────────────────────
 function TrafficAvatar({ size = 'md' }: { size?: 'sm' | 'md' }) {
   const dim = size === 'sm' ? 'h-8 w-8 text-[15px]' : 'h-16 w-16 text-3xl'
   const dot =
@@ -51,7 +49,6 @@ function TrafficAvatar({ size = 'md' }: { size?: 'sm' | 'md' }) {
   )
 }
 
-// ── Generic AI Avatar ───────────────────────────────────────────────────────
 function AIAvatar({ size = 'md' }: { size?: 'sm' | 'md' }) {
   const dim = size === 'sm' ? 'h-8 w-8' : 'h-10 w-10'
   return (
@@ -63,7 +60,6 @@ function AIAvatar({ size = 'md' }: { size?: 'sm' | 'md' }) {
   )
 }
 
-// ── Copy button ─────────────────────────────────────────────────────────────
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false)
   const handle = () => {
@@ -102,11 +98,21 @@ export function AIChatArea({ chat, onToggleInfoPanel = () => {}, isInfoPanelOpen
   const [isTyping, setIsTyping] = useState(false)
   const [showSuggestions, setShowSuggestions] = useState(true)
 
-  // ── States cho tính năng Voice Recording ──
-  const [isRecording, setIsRecording] = useState(false)
-  const [isVoiceProcessing, setIsVoiceProcessing] = useState(false)
+  // ── States & Refs cho Voice Call & Barge-in ──
+  const [isVoiceOverlayOpen, setIsVoiceOverlayOpen] = useState(false)
+  const [voiceStatusText, setVoiceStatusText] = useState<string>('Đang nghe bạn nói...')
+  const [isRecordingVoice, setIsRecordingVoice] = useState(false)
+  const [isAiSpeaking, setIsAiSpeaking] = useState(false)
+
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const audioChunksRef = useRef<Blob[]>([])
+  const streamRef = useRef<MediaStream | null>(null)
+  const currentAudioRef = useRef<HTMLAudioElement | null>(null)
+  const isUserCancelledRef = useRef<boolean>(false)
+
+  // Audio Context phục vụ việc đo giọng nói để ngắt AI (Barge-in)
+  const audioContextRef = useRef<AudioContext | null>(null)
+  const bargeInAnimFrameRef = useRef<number | null>(null)
 
   useEffect(() => {
     setMessages([
@@ -141,6 +147,217 @@ export function AIChatArea({ chat, onToggleInfoPanel = () => {}, isInfoPanelOpen
     }
   }, [inputText])
 
+  // ── 1. MỞ OVERLAY & LẮNG NGHE ─────────────────────────────────────────────
+  const handleStartVoiceCall = async () => {
+    isUserCancelledRef.current = false
+    setIsVoiceOverlayOpen(true)
+    startListening()
+  }
+
+  const startListening = async () => {
+    if (isUserCancelledRef.current) return
+
+    try {
+      stopAiAudio()
+      setIsAiSpeaking(false)
+      setIsRecordingVoice(true)
+      setVoiceStatusText('Đang nghe bạn nói... (Bấm nút vuông để gửi)')
+
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      streamRef.current = stream
+
+      mediaRecorderRef.current = new MediaRecorder(stream)
+      audioChunksRef.current = []
+
+      mediaRecorderRef.current.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data)
+      }
+
+      mediaRecorderRef.current.onstop = async () => {
+        setIsRecordingVoice(false)
+        stopStream()
+
+        if (isUserCancelledRef.current) return
+
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' })
+        if (audioBlob.size > 3000) {
+          await processVoiceAndReply(audioBlob)
+        } else {
+          setVoiceStatusText('Chưa nghe rõ câu hỏi. Đang lắng nghe lại...')
+          setTimeout(() => {
+            if (!isUserCancelledRef.current) startListening()
+          }, 1200)
+        }
+      }
+
+      mediaRecorderRef.current.start()
+    } catch (err) {
+      console.error('Lỗi mở Micro:', err)
+      setVoiceStatusText('Không thể truy cập Micro!')
+    }
+  }
+
+  // ── 2. HÀM DỪNG GHI ÂM CHỐT CÂU HỎI ────────────────────────────────────────
+  const handleStopAndSendVoice = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+      setVoiceStatusText('Đang chốt câu hỏi...')
+      mediaRecorderRef.current.stop()
+    }
+  }
+
+  // ── 3. PHÁT LOA AI & KÍCH HOẠT TÍNH NĂNG CẮT LỜI (BARGE-IN) ──────────────────
+  const processVoiceAndReply = async (blob: Blob) => {
+    if (isUserCancelledRef.current) return
+
+    setVoiceStatusText('AI đang suy nghĩ...')
+    setIsAiSpeaking(true)
+
+    try {
+      const formData = new FormData()
+      formData.append('audio', blob, 'voice.webm')
+
+      const chatContext = messages.filter((m) => m.id !== 'welcome-msg').map((m) => ({ role: m.role, content: m.text }))
+      formData.append('chatHistory', JSON.stringify(chatContext))
+
+      const res = await (aiApi as any).sendVoiceChat(formData)
+      if (isUserCancelledRef.current) return
+
+      const { aiReplyText, isVietnamese, audioBase64 } = res.data
+      setVoiceStatusText('AI đang trả lời... (Nói vào mic để cắt lời AI)')
+
+      // KÍCH HOẠT LẮNG NGHE LỚP NỀN ĐỂ BẮT GIỌNG NÓI CẮT LỜI AI (BARGE-IN)
+      listenForBargeIn()
+
+      const handleFinishedSpeaking = () => {
+        stopBargeInListener()
+        setIsAiSpeaking(false)
+        if (!isUserCancelledRef.current) {
+          startListening()
+        }
+      }
+
+      // Phát âm thanh
+      if (!isVietnamese && audioBase64) {
+        const audio = new Audio(`data:audio/mp3;base64,${audioBase64}`)
+        currentAudioRef.current = audio
+        audio.onended = handleFinishedSpeaking
+        await audio.play().catch(() => {})
+      } else if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel()
+        const cleanText = aiReplyText.replace(/[*#_`]/g, '').replace(/([.,!?])/g, '$1 ')
+        const utterance = new SpeechSynthesisUtterance(cleanText)
+        utterance.lang = 'vi-VN'
+        utterance.rate = 0.96
+        utterance.pitch = 1.05
+
+        const voices = window.speechSynthesis.getVoices()
+        const bestViVoice =
+          voices.find(
+            (v) =>
+              (v.lang.includes('vi') || v.lang.includes('VN')) &&
+              (v.name.includes('Natural') || v.name.includes('Google') || v.name.includes('Online'))
+          ) || voices.find((v) => v.lang.includes('vi'))
+
+        if (bestViVoice) utterance.voice = bestViVoice
+        utterance.onend = handleFinishedSpeaking
+
+        window.speechSynthesis.speak(utterance)
+      }
+    } catch (error) {
+      console.error('Lỗi voice chat:', error)
+      stopBargeInListener()
+      if (!isUserCancelledRef.current) {
+        setVoiceStatusText('Lỗi kết nối AI. Đang thử lại...')
+        setTimeout(() => startListening(), 2000)
+      }
+    }
+  }
+
+  // ── 4. LOGIC GIÁM SÁT ÂM LƯỢNG MICRO ĐỂ CẮT NGẮT LỜI AI ────────────────────
+  const listenForBargeIn = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      streamRef.current = stream
+
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
+      const analyser = audioContext.createAnalyser()
+      const source = audioContext.createMediaStreamSource(stream)
+      analyser.fftSize = 512
+      source.connect(analyser)
+
+      audioContextRef.current = audioContext
+
+      const bufferLength = analyser.frequencyBinCount
+      const dataArray = new Uint8Array(bufferLength)
+
+      const detectSpeech = () => {
+        if (isUserCancelledRef.current) return
+
+        analyser.getByteFrequencyData(dataArray)
+        let sum = 0
+        for (let i = 0; i < dataArray.length; i++) sum += dataArray[i]
+        const averageVolume = sum / bufferLength
+
+        // Tần số giọng nói người dùng phát ra (> 25) -> CẮT LỜI AI NGAY LẬP TỨC!
+        if (averageVolume > 25) {
+          stopBargeInListener()
+          stopAiAudio() // Dừng loa AI
+          setVoiceStatusText('Đã ngắt AI! Đang nghe bạn nói...')
+          startListening() // Chuyển sang thu âm giọng nói của bạn
+          return
+        }
+
+        bargeInAnimFrameRef.current = requestAnimationFrame(detectSpeech)
+      }
+
+      detectSpeech()
+    } catch (e) {
+      console.error('Lỗi lắng nghe Barge-in:', e)
+    }
+  }
+
+  const stopBargeInListener = () => {
+    if (bargeInAnimFrameRef.current) cancelAnimationFrame(bargeInAnimFrameRef.current)
+    if (audioContextRef.current) {
+      audioContextRef.current.close().catch(() => {})
+      audioContextRef.current = null
+    }
+  }
+
+  const stopAiAudio = () => {
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel()
+    }
+    if (currentAudioRef.current) {
+      currentAudioRef.current.pause()
+      currentAudioRef.current = null
+    }
+  }
+
+  const stopStream = () => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop())
+      streamRef.current = null
+    }
+  }
+
+  // ── 5. TẮT HOÀN TOÀN CUỘC GỌI VOICE CALL ───────────────────────────────────
+  const handleCloseVoiceOverlay = () => {
+    isUserCancelledRef.current = true
+    stopBargeInListener()
+    stopAiAudio()
+    stopStream()
+
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+      mediaRecorderRef.current.stop()
+    }
+
+    setIsVoiceOverlayOpen(false)
+    setIsRecordingVoice(false)
+    setIsAiSpeaking(false)
+  }
+
+  // ── NHẮN TIN CHỮ THƯỜNG ─────────────────────────────────────────────────────
   const handleSend = async (overrideText?: string) => {
     const query = (overrideText ?? inputText).trim()
     if (!query || isTyping) return
@@ -225,107 +442,6 @@ export function AIChatArea({ chat, onToggleInfoPanel = () => {}, isInfoPanelOpen
     }
   }
 
-  // ── XỬ LÝ VOICE RECORDING ────────────────────────────────────────────────
-  const startRecording = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      mediaRecorderRef.current = new MediaRecorder(stream)
-      audioChunksRef.current = []
-
-      mediaRecorderRef.current.ondataavailable = (event) => {
-        if (event.data.size > 0) audioChunksRef.current.push(event.data)
-      }
-
-      mediaRecorderRef.current.onstop = async () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' })
-        stream.getTracks().forEach((track) => track.stop()) // Tắt micro
-        await handleSendVoice(audioBlob)
-      }
-
-      mediaRecorderRef.current.start()
-      setIsRecording(true)
-    } catch (err) {
-      console.error('Lỗi mở Micro:', err)
-      alert('Vui lòng cấp quyền Microphone cho trình duyệt để sử dụng Voice Chat!')
-    }
-  }
-
-  const stopRecording = () => {
-    if (mediaRecorderRef.current && isRecording) {
-      mediaRecorderRef.current.stop()
-      setIsRecording(false)
-    }
-  }
-
-  const handleSendVoice = async (blob: Blob) => {
-    setIsVoiceProcessing(true)
-    setIsTyping(true)
-    setShowSuggestions(false)
-
-    try {
-      const formData = new FormData()
-      formData.append('audio', blob, 'voice.webm')
-
-      const chatContext = messages.filter((m) => m.id !== 'welcome-msg').map((m) => ({ role: m.role, content: m.text }))
-      formData.append('chatHistory', JSON.stringify(chatContext))
-
-      const res = await (aiApi as any).sendVoiceChat(formData)
-      const { userQuestion, aiReplyText, isVietnamese, audioBase64 } = res.data
-
-      if (userQuestion) {
-        setMessages((prev) => [
-          ...prev,
-          { id: Date.now().toString(), role: 'user', text: userQuestion, timestamp: new Date() }
-        ])
-      }
-
-      if (aiReplyText) {
-        setMessages((prev) => [
-          ...prev,
-          { id: (Date.now() + 1).toString(), role: 'model', text: aiReplyText, timestamp: new Date() }
-        ])
-
-        // PHÁT LOA DỰA TRÊN NGÔN NGỮ
-        if (!isVietnamese && audioBase64) {
-          // 👉 TIẾNG ANH: Giọng AWS Polly Joanna SSML siêu mượt
-          const audio = new Audio(`data:audio/mp3;base64,${audioBase64}`)
-          audio.play().catch((e) => console.error('Lỗi phát AWS Polly audio:', e))
-        } else if ('speechSynthesis' in window) {
-          // 👉 TIẾNG VIỆT: Tự chọn giọng đọc hay nhất của Trình Duyện
-          window.speechSynthesis.cancel()
-
-          // Chèn khoảng nghỉ ngắn cho dấu câu
-          const cleanText = aiReplyText.replace(/[*#_`]/g, '').replace(/([.,!?])/g, '$1 ')
-
-          const utterance = new SpeechSynthesisUtterance(cleanText)
-          utterance.lang = 'vi-VN'
-          utterance.rate = 0.96 // Tốc độ vừa phải
-          utterance.pitch = 1.05 // Cao độ tươi tắn
-
-          // TÌM GIỌNG ĐỌC TIẾNG VIỆT TỰ NHIÊN NHẤT TRÊN THIẾT BỊ
-          const voices = window.speechSynthesis.getVoices()
-          const bestViVoice =
-            voices.find(
-              (v) =>
-                (v.lang.includes('vi') || v.lang.includes('VN')) &&
-                (v.name.includes('Natural') || v.name.includes('Google') || v.name.includes('Online'))
-            ) || voices.find((v) => v.lang.includes('vi') || v.lang.includes('VN'))
-
-          if (bestViVoice) {
-            utterance.voice = bestViVoice
-          }
-
-          window.speechSynthesis.speak(utterance)
-        }
-      }
-    } catch (error: any) {
-      console.error('Lỗi Voice Chat:', error)
-    } finally {
-      setIsVoiceProcessing(false)
-      setIsTyping(false)
-    }
-  }
-
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
@@ -334,19 +450,17 @@ export function AIChatArea({ chat, onToggleInfoPanel = () => {}, isInfoPanelOpen
   }
 
   return (
-    <div className='flex flex-col h-screen w-full overflow-hidden bg-background'>
-      {/* ── Header ── */}
+    <div className='flex flex-col h-screen w-full overflow-hidden bg-background relative'>
+      {/* Header */}
       <div className='shrink-0 bg-background z-20 border-b border-border/40'>
         <ChatHeader chat={chat} onToggleInfoPanel={onToggleInfoPanel} isInfoPanelOpen={isInfoPanelOpen} />
       </div>
 
-      {/* ── Message list ── */}
+      {/* Message list */}
       <div ref={containerRef} className='flex-1 overflow-y-auto scroll-smooth bg-muted/10'>
         <div className='flex flex-col gap-4 min-h-full pb-4'>
-          {/* ── Traffic welcome header (đồng bộ mobile) ── */}
           {isTraffic && (
             <div className='flex flex-col items-center py-10 px-6 gap-4'>
-              {/* Large avatar */}
               <div className='relative'>
                 <div className='h-20 w-20 flex items-center justify-center rounded-full bg-[#1e3a5f] border-[3px] border-blue-500 shadow-lg text-4xl'>
                   🚦
@@ -365,7 +479,6 @@ export function AIChatArea({ chat, onToggleInfoPanel = () => {}, isInfoPanelOpen
                 </div>
               </div>
 
-              {/* Quick suggestions — đồng bộ mobile */}
               {showSuggestions && (
                 <div className='w-full max-w-xl'>
                   <p className='text-xs font-semibold uppercase tracking-widest text-muted-foreground mb-3 text-center'>
@@ -390,24 +503,20 @@ export function AIChatArea({ chat, onToggleInfoPanel = () => {}, isInfoPanelOpen
             </div>
           )}
 
-          {/* ── Messages ── */}
           {messages.map((msg) => {
             const isUser = msg.role === 'user'
 
             return (
               <div key={msg.id} className={`flex gap-3 px-4 ${isUser ? 'justify-end' : 'justify-start'}`}>
-                {/* Bot avatar */}
                 {!isUser && (isTraffic ? <TrafficAvatar size='sm' /> : <AIAvatar size='sm' />)}
 
                 <div className={`flex flex-col ${isUser ? 'items-end max-w-[75%]' : 'items-start max-w-[85%]'}`}>
-                  {/* Bot label (traffic only, giống mobile) */}
                   {!isUser && isTraffic && msg.id !== 'welcome-msg' && (
                     <span className='text-[11px] text-muted-foreground font-semibold mb-1 ml-1'>
                       ChatPulse Giao Thông
                     </span>
                   )}
 
-                  {/* Message content */}
                   {isUser ? (
                     <div
                       className={`px-4 py-2.5 rounded-2xl rounded-tr-sm shadow-sm bg-gradient-to-r ${config.themeGradient} text-white`}
@@ -419,16 +528,13 @@ export function AIChatArea({ chat, onToggleInfoPanel = () => {}, isInfoPanelOpen
                       <p className='text-sm leading-relaxed'>{msg.text}</p>
                     </div>
                   ) : isTraffic && msg.id !== 'welcome-msg' && msg.cardData ? (
-                    /* Traffic card — đồng bộ hoàn toàn với mobile */
                     <TrafficCard data={msg.cardData} />
                   ) : (
-                    /* Plain text bubble (welcome hoặc non-traffic) */
                     <div className='px-4 py-2.5 rounded-2xl rounded-tl-sm shadow-sm bg-background border border-border text-foreground'>
                       <p className='text-[15px] leading-relaxed whitespace-pre-wrap'>{msg.text}</p>
                     </div>
                   )}
 
-                  {/* Footer */}
                   <div className={`flex items-center gap-3 mt-1 ${isUser ? 'flex-row-reverse' : 'flex-row'} ml-1`}>
                     <span className='text-[10px] text-muted-foreground'>
                       {msg.timestamp.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}
@@ -457,58 +563,102 @@ export function AIChatArea({ chat, onToggleInfoPanel = () => {}, isInfoPanelOpen
         </div>
       </div>
 
-      {/* ── Input bar ── */}
+      {/* Input bar */}
       <div className='shrink-0 border-t border-border/40 bg-background px-4 py-3 shadow-sm z-20 flex items-end gap-2'>
         <div
           className={`relative flex-1 flex items-end bg-muted rounded-[24px] border border-border outline-none transition-all ring-2 ring-transparent focus-within:ring-2 ${config.ringColor}`}
         >
           <textarea
             ref={inputRef}
-            placeholder={isRecording ? 'Đang lắng nghe bạn nói...' : config.placeholder}
+            placeholder={config.placeholder}
             className='w-full bg-transparent text-foreground px-5 py-[10px] outline-none resize-none leading-relaxed text-sm placeholder:text-muted-foreground'
             style={{ minHeight: '44px', height: '44px', maxHeight: '130px' }}
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
             onKeyDown={handleKeyDown}
-            disabled={isTyping || isRecording}
+            disabled={isTyping}
             rows={1}
           />
         </div>
 
-        {/* ── NÚT MICRO VOICE CHAT ── */}
+        {/* NÚT MỞ VOICE CALL OVERLAY */}
         <button
           type='button'
-          onClick={isRecording ? stopRecording : startRecording}
-          disabled={isTyping || isVoiceProcessing}
-          className={`w-11 h-11 rounded-full flex items-center justify-center transition-all duration-200 shadow-md shrink-0 ${
-            isRecording
-              ? 'bg-red-500 text-white animate-pulse ring-4 ring-red-300'
-              : 'bg-muted hover:bg-muted/80 text-foreground border border-border'
-          }`}
-          title={isRecording ? 'Nhấn để dừng và gửi' : 'Bấm để nói chuyện với AI'}
+          onClick={handleStartVoiceCall}
+          disabled={isTyping}
+          className='w-11 h-11 rounded-full bg-purple-600 hover:bg-purple-700 text-white flex items-center justify-center transition-all duration-200 shadow-md shrink-0'
+          title='Trò chuyện giọng nói với AI'
         >
-          {isVoiceProcessing ? (
-            <Loader2 className='w-5 h-5 animate-spin text-primary' />
-          ) : isRecording ? (
-            <Square className='w-4 h-4 fill-current' />
-          ) : (
-            <Mic className='w-5 h-5' />
-          )}
+          <Mic className='w-5 h-5' />
         </button>
 
-        {/* ── NÚT SEND ── */}
         <button
           onClick={() => handleSend()}
-          disabled={!inputText.trim() || isTyping || isRecording}
-          className={`w-11 h-11 bg-gradient-to-r ${config.themeGradient} text-white rounded-full hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center shadow-md shrink-0`}
+          disabled={!inputText.trim() || isTyping}
+          className={`w-11 h-11 bg-gradient-to-r ${config.themeGradient} text-white rounded-full flex items-center justify-center shadow-md shrink-0`}
         >
-          {isTyping && !isVoiceProcessing ? (
-            <Loader2 className='w-5 h-5 animate-spin' />
-          ) : (
-            <Send className='w-4 h-4 ml-0.5' />
-          )}
+          <Send className='w-4 h-4 ml-0.5' />
         </button>
       </div>
+
+      {/* ── 🌟 OVERLAY BACKGROUND MỜ MỜ (FROSTED GLASS) 🌟 ── */}
+      {isVoiceOverlayOpen && (
+        <div className='absolute inset-0 z-50 bg-black/50 backdrop-blur-md flex flex-col items-center justify-between py-10 px-6 animate-in fade-in duration-300'>
+          {/* Header Overlay */}
+          <div className='text-center space-y-1.5 mt-2 bg-black/40 px-6 py-3 rounded-full border border-white/10 shadow-lg backdrop-blur-md'>
+            <h3 className='text-base font-bold text-white tracking-wide flex items-center justify-center gap-2'>
+              <span className='w-2 h-2 rounded-full bg-purple-400 animate-ping' />
+              ChatPulse Voice AI
+            </h3>
+            <p className='text-xs text-purple-200 font-medium animate-pulse'>{voiceStatusText}</p>
+          </div>
+
+          {/* Sóng âm & Orb nhảy nhót ở giữa */}
+          <div className='relative flex items-center justify-center my-auto'>
+            <div
+              className={`absolute w-44 h-44 rounded-full bg-purple-500/30 ${
+                isAiSpeaking ? 'animate-ping' : 'animate-pulse'
+              }`}
+            />
+            <div
+              className={`absolute w-32 h-32 rounded-full bg-indigo-500/40 ${
+                isAiSpeaking ? 'animate-bounce' : 'animate-pulse'
+              }`}
+            />
+
+            <div className='relative w-24 h-24 rounded-full bg-gradient-to-br from-purple-500 via-indigo-600 to-blue-600 flex items-center justify-center shadow-2xl border-2 border-white/30 animate-bounce'>
+              {isAiSpeaking ? (
+                <Volume2 className='w-10 h-10 text-white animate-pulse' />
+              ) : (
+                <Mic className='w-10 h-10 text-white animate-pulse' />
+              )}
+            </div>
+          </div>
+
+          {/* Footer: Cụm Nút Điều Khiển Voice Call */}
+          <div className='flex items-center gap-6 mb-2'>
+            {/* Nút vuông: Bấm để CHỐT CÂU HỎI & gửi AI */}
+            {isRecordingVoice && (
+              <button
+                onClick={handleStopAndSendVoice}
+                className='w-14 h-14 rounded-full bg-purple-600 hover:bg-purple-700 text-white flex items-center justify-center shadow-xl hover:scale-105 active:scale-95 transition-all duration-200 ring-4 ring-purple-500/40'
+                title='Bấm để chốt và gửi câu hỏi'
+              >
+                <Square className='w-6 h-6 fill-current' />
+              </button>
+            )}
+
+            {/* Nút đỏ: Bấm để TẮT HOÀN TOÀN voice call */}
+            <button
+              onClick={handleCloseVoiceOverlay}
+              className='w-14 h-14 rounded-full bg-red-600 hover:bg-red-700 text-white flex items-center justify-center shadow-xl hover:scale-105 active:scale-95 transition-all duration-200 ring-4 ring-red-500/40'
+              title='Tắt cuộc gọi giọng nói'
+            >
+              <PhoneOff className='w-6 h-6' />
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
