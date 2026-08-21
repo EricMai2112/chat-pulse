@@ -38,11 +38,7 @@ const userApi = {
   },
 
   uploadAvatar(body: FormData) {
-    return http.post('/users/upload-avatar', body, {
-      headers: {
-        'Content-Type': 'multipart/form-data'
-      }
-    })
+    return http.post('/users/upload-avatar', body)
   }
 }
 

@@ -277,7 +277,7 @@ export function useConversations() {
     const handleUserStatusChange = (data: { userId: string; isOnline: boolean; lastActiveAt?: string }) => {
       setChatList((prevChats) =>
         prevChats.map((chat) => {
-          const hasUser = chat.participants?.some((p: any) => String(p._id) === String(data.userId))
+          const hasUser = chat.participants?.some((p: any) => String(p?._id || p?.userId || p) === String(data.userId))
           if (hasUser) {
             const updatedParticipants = chat.participants.map((p: any) =>
               String(p._id) === String(data.userId)

@@ -85,11 +85,7 @@ export const messagesApi = {
 
     if (replyToId) formData.append('replyToId', replyToId)
 
-    return http.post<{ message: string; result: Message }>('/messages/media', formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data'
-      }
-    })
+    return http.post<{ message: string; result: Message }>('/messages/media', formData)
   },
 
   forwardMessage: (messageId: string, targetUserIds: string[], targetGroupIds: string[]) => {

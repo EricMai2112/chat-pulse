@@ -35,6 +35,12 @@ class Http {
           // BẮT BUỘC phải có chữ 'Bearer ' trước token
           config.headers.Authorization = `Bearer ${this.access_token}`
         }
+
+        // Tự động xóa Content-Type: application/json nếu gửi FormData để Browser/Axios tự sinh multipart/form-data với boundary chuẩn
+        if (config.data instanceof FormData && config.headers) {
+          delete config.headers['Content-Type']
+        }
+
         return config
       },
       (error) => {

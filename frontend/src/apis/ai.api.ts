@@ -13,10 +13,6 @@ export const aiApi = {
       userQuestion: string
       aiReplyText: string
       audioBase64: string
-    }>('/api/ai/voice-chat', formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data'
-      }
-    })
+    }>('/ai/voice-chat', formData)
   }
 }

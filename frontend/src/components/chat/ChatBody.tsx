@@ -110,57 +110,57 @@ export function ChatBody({ convId, pinnedMessages, onPinMessage }: ChatBodyProps
     if (!currentUserId || !convId || !socket) return
 
     const handleReceiveMessage = (newMessage: Message) => {
-      if (newMessage.conversationId === convId) {
-        setMessages((prev) => {
-          if (prev.some((msg) => msg._id === newMessage._id)) return prev
+      if (!newMessage || newMessage.conversationId !== convId) return
 
-          if (newMessage.replyToId && !newMessage.replyToMessage) {
-            const repliedMsg = prev.find((m) => m._id === newMessage.replyToId)
-            if (repliedMsg) {
-              newMessage.replyToMessage = {
-                _id: repliedMsg._id,
-                content: repliedMsg.content,
-                type: repliedMsg.type,
-                senderName: repliedMsg.sender?.userName || 'Người dùng'
-              }
+      setMessages((prev) => {
+        if (prev.some((msg) => msg?._id === newMessage?._id)) return prev
+
+        if (newMessage.replyToId && !newMessage.replyToMessage) {
+          const repliedMsg = prev.find((m) => m?._id === newMessage.replyToId)
+          if (repliedMsg) {
+            newMessage.replyToMessage = {
+              _id: repliedMsg._id,
+              content: repliedMsg.content,
+              type: repliedMsg.type,
+              senderName: repliedMsg.sender?.userName || 'Người dùng'
             }
           }
-
-          const isMe = newMessage.sender._id === currentUserId
-          if (isMe) {
-            const tempIndex = prev.findIndex(
-              (msg) =>
-                msg.status === 'SENDING' &&
-                (msg.content === newMessage.content || (msg.type === 'media' && newMessage.type === 'media'))
-            )
-
-            if (tempIndex !== -1) {
-              const newArr = [...prev]
-              if (!newMessage.replyToMessage && newArr[tempIndex].replyToMessage) {
-                newMessage.replyToMessage = newArr[tempIndex].replyToMessage
-              }
-              newArr[tempIndex] = newMessage
-              return newArr
-            }
-          }
-
-          return [...prev, newMessage]
-        })
-
-        setTimeout(() => {
-          if (containerRef.current) containerRef.current.scrollTop = containerRef.current.scrollHeight
-        }, 50)
-
-        if (newMessage.sender._id !== currentUserId) {
-          socket.emit('message_seen', { messageId: newMessage._id, conversationId: convId })
         }
+
+        const isMe = newMessage.sender?._id === currentUserId
+        if (isMe) {
+          const tempIndex = prev.findIndex(
+            (msg) =>
+              msg?.status === 'SENDING' &&
+              (msg.content === newMessage.content || (msg.type === 'media' && newMessage.type === 'media'))
+          )
+
+          if (tempIndex !== -1) {
+            const newArr = [...prev]
+            if (!newMessage.replyToMessage && newArr[tempIndex]?.replyToMessage) {
+              newMessage.replyToMessage = newArr[tempIndex].replyToMessage
+            }
+            newArr[tempIndex] = newMessage
+            return newArr
+          }
+        }
+
+        return [...prev, newMessage]
+      })
+
+      setTimeout(() => {
+        if (containerRef.current) containerRef.current.scrollTop = containerRef.current.scrollHeight
+      }, 50)
+
+      if (newMessage.sender?._id && newMessage.sender._id !== currentUserId) {
+        socket.emit('message_seen', { messageId: newMessage._id, conversationId: convId })
       }
     }
 
     const handleMessageStatusUpdate = ({ messageId, status, userId }: any) => {
       setMessages((prev) =>
         prev.map((msg) => {
-          if (msg._id === messageId) {
+          if (msg?._id === messageId) {
             const updatedMsg = { ...msg }
             if (status === 'DELIVERED') {
               updatedMsg.status = msg.status !== 'SEEN' ? 'DELIVERED' : 'SEEN'
@@ -180,13 +180,13 @@ export function ChatBody({ convId, pinnedMessages, onPinMessage }: ChatBodyProps
     }
 
     const handleMessageReacted = ({ messageId, reactions }: any) => {
-      setMessages((prev) => prev.map((msg) => (msg._id === messageId ? { ...msg, reactions } : msg)))
+      setMessages((prev) => prev.map((msg) => (msg?._id === messageId ? { ...msg, reactions } : msg)))
     }
 
     const handleMessageRevoked = ({ messageId, conversationId }: any) => {
       if (conversationId === convId) {
         setMessages((prev) =>
-          prev.map((msg) => (msg._id === messageId ? { ...msg, type: 'revoked', content: '' } : msg))
+          prev.map((msg) => (msg?._id === messageId ? { ...msg, type: 'revoked', content: '' } : msg))
         )
       }
     }
@@ -195,7 +195,7 @@ export function ChatBody({ convId, pinnedMessages, onPinMessage }: ChatBodyProps
       const { tempId, errorMessage } = e.detail
       setMessages((prev: any[]) =>
         prev.map((msg) =>
-          msg._id === tempId ? { ...msg, type: 'system', content: errorMessage, isWarning: true } : msg
+          msg?._id === tempId ? { ...msg, type: 'system', content: errorMessage, isWarning: true } : msg
         )
       )
     }
@@ -206,37 +206,41 @@ export function ChatBody({ convId, pinnedMessages, onPinMessage }: ChatBodyProps
     socket.on('message_revoked', handleMessageRevoked)
 
     const handleOptSend = (e: any) => {
-      setMessages((prev) => [...prev, e.detail])
-      setTimeout(() => {
-        if (containerRef.current) containerRef.current.scrollTop = containerRef.current.scrollHeight
-      }, 10)
+      if (e?.detail) {
+        setMessages((prev) => [...prev, e.detail])
+        setTimeout(() => {
+          if (containerRef.current) containerRef.current.scrollTop = containerRef.current.scrollHeight
+        }, 10)
+      }
     }
 
     const handleOptSuccess = (e: any) => {
-      const { tempId, realMessage } = e.detail
+      const { tempId, realMessage } = e.detail || {}
+      if (!realMessage) return
+
       setMessages((prev) => {
-        const tempMsg = prev.find((m) => m._id === tempId)
-        if (tempMsg?.replyToMessage && !realMessage.replyToMessage) {
+        const tempMsg = prev.find((m) => m?._id === tempId)
+        if (tempMsg?.replyToMessage && !realMessage?.replyToMessage) {
           realMessage.replyToMessage = tempMsg.replyToMessage
         }
 
-        const isRealExist = prev.some((msg) => msg._id === realMessage._id)
-        if (isRealExist) return prev.filter((msg) => msg._id !== tempId)
+        const isRealExist = prev.some((msg) => msg?._id === realMessage?._id)
+        if (isRealExist) return prev.filter((msg) => msg?._id !== tempId)
 
-        return prev.map((msg) => (msg._id === tempId ? realMessage : msg))
+        return prev.map((msg) => (msg?._id === tempId ? realMessage : msg))
       })
     }
 
     const handleOptFail = (e: any) => {
       setMessages((prev) =>
         prev.map((msg) =>
-          msg._id === e.detail.tempId ? { ...msg, status: 'FAILED', _apiCall: e.detail.apiCall } : msg
+          msg?._id === e.detail?.tempId ? { ...msg, status: 'FAILED', _apiCall: e.detail?.apiCall } : msg
         )
       )
     }
 
     const handleOptRetryStart = (e: any) => {
-      setMessages((prev) => prev.map((msg) => (msg._id === e.detail.tempId ? { ...msg, status: 'SENDING' } : msg)))
+      setMessages((prev) => prev.map((msg) => (msg?._id === e.detail?.tempId ? { ...msg, status: 'SENDING' } : msg)))
     }
 
     window.addEventListener('optimistic_send', handleOptSend)
@@ -363,7 +367,7 @@ export function ChatBody({ convId, pinnedMessages, onPinMessage }: ChatBodyProps
                 isFirstInGroup={isFirstInGroup}
                 isLastInGroup={isLastInGroup}
                 onDeleteForMe={handleDeleteForMe}
-                isPinned={pinnedMessages?.some((p) => p.messageId === msg._id)}
+                isPinned={pinnedMessages?.some((p) => p?.messageId === msg?._id)}
                 onPinMessage={onPinMessage}
               />
             )

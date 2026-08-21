@@ -66,6 +66,7 @@ app.use('/advanced-search', advancedSearchRouter)
 app.use('/groups', groupRouter)
 app.use('/calls', callRouter)
 app.use('/traffic-ai', trafficRouter)
+app.use('/ai', aiRouter)
 app.use('/api/ai', aiRouter)
 
 //default global error

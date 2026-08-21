@@ -60,9 +60,9 @@ const messageProjection = {
   deliveredTo: 1,
   seenBy: 1,
   sender: {
-    _id: '$senderInfo._id',
-    userName: '$senderInfo.userName',
-    avatar: '$senderInfo.avatar'
+    _id: { $ifNull: ['$senderInfo._id', '$senderId'] },
+    userName: { $ifNull: ['$senderInfo.userName', 'Người dùng'] },
+    avatar: { $ifNull: ['$senderInfo.avatar', ''] }
   },
   replyToMessage: replyToMessageProjection
 }
@@ -99,7 +99,7 @@ class MessageService {
         { $sort: { createdAt: -1 } },
         { $limit: limit },
         { $lookup: { from: 'users', localField: 'senderId', foreignField: '_id', as: 'senderInfo' } },
-        { $unwind: '$senderInfo' },
+        { $unwind: { path: '$senderInfo', preserveNullAndEmptyArrays: true } },
         ...replyToLookupStages,
         { $project: messageProjection }
       ])
@@ -213,7 +213,7 @@ class MessageService {
       .aggregate([
         { $match: { _id: messageId } },
         { $lookup: { from: 'users', localField: 'senderId', foreignField: '_id', as: 'senderInfo' } },
-        { $unwind: '$senderInfo' },
+        { $unwind: { path: '$senderInfo', preserveNullAndEmptyArrays: true } },
         ...replyToLookupStages,
         { $project: messageProjection }
       ])
