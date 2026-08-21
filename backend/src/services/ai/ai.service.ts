@@ -92,7 +92,7 @@ class AiService {
 
   constructor() {
     this.groq = new Groq({ apiKey: process.env.GROQ_API_KEY as string })
-    this.modelName = process.env.GROQ_MODEL || 'llama-3.1-8b-instant'
+    this.modelName = process.env.GROQ_MODEL || 'openai/gpt-oss-20b'
     this.pollyClient = new PollyClient({ region: process.env.AWS_REGION || 'ap-southeast-1' })
   }
 

@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { ChatHeader } from './ChatHeader'
 import type { ChatItem } from '@/context/app.context'
-import { Send, Bot, Loader2, Copy, Check, Mic, PhoneOff, Volume2, Square } from 'lucide-react'
+import { Send, Bot, Copy, Check, Mic, PhoneOff, Volume2, Square } from 'lucide-react'
 import { aiApi } from '@/apis/ai.api'
 import { trafficApi } from '@/apis/traffic.api'
 import { TrafficCard } from './TrafficCard'
