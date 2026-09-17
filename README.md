@@ -1,6 +1,6 @@
 # 💬 ChatPulse - Nền tảng Nhắn tin & Gọi Video Real-time Đa nền tảng (Web & Mobile)
 
-> **ChatPulse** là một hệ thống truyền thông thời gian thực (real-time) toàn diện, hoạt động mượt mà trên cả Web và Mobile. Dự án nổi bật với các công nghệ hiện đại như Mã hóa đầu cuối (E2EE) để bảo vệ quyền riêng tư, Gọi video/audio chất lượng cao qua WebRTC, và tích hợp Trợ lý AI phân tích tài liệu thông minh.
+> **ChatPulse** là một hệ thống truyền thông thời gian thực (real-time) toàn diện, hoạt động mượt mà trên cả Web và Mobile. Dự án nổi bật với các công nghệ hiện đại như Mã hóa đầu cuối (E2EE) để bảo vệ quyền riêng tư, Gọi video/audio chất lượng cao qua WebRTC, trợ năng giọng nói thông minh và được vận hành trên hạ tầng đám mây AWS với luồng CI/CD tự động hóa.
 
 [![React](https://img.shields.io/badge/React-19.0-61DAFB?logo=react&logoColor=white)](#)
 [![React Native](https://img.shields.io/badge/React_Native-Expo-61DAFB?logo=react&logoColor=white)](#)
@@ -8,44 +8,18 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0-3178C6?logo=typescript&logoColor=white)](#)
 [![Socket.io](https://img.shields.io/badge/Socket.io-Real--time-010101?logo=socket.dot_io&logoColor=white)](#)
 [![LiveKit](https://img.shields.io/badge/LiveKit-WebRTC-5B21B6?logo=webrtc&logoColor=white)](#)
+[![AWS](https://img.shields.io/badge/AWS-Cloud_Infrastructure-FF9900?logo=amazon-web-services&logoColor=white)](#)
 
 ---
 
 ## 🚀 Demo & Tài khoản Trải nghiệm
 
-- **Link Live Demo (Web App):** [chatpulse-frontend.vercel.app](https://chatpulse-frontend.vercel.app/)
+- **Link Live Demo (Web App):** [https://ericmai.io.vn](https://ericmai.io.vn)
 - **Tài khoản trải nghiệm nhanh (Dành cho nhà tuyển dụng):**
   - **Email:** `dd@gmail.com`
   - **Mật khẩu (Password):** `111111`
 
-_(Bạn cũng có thể tự đăng ký tài khoản mới trực tiếp trên giao diện để trải nghiệm toàn bộ tính năng)._
-
----
-
-## 📸 Giao diện Hệ thống (Screenshots)
-
-### 🖥️ Giao diện Web Client
-
-_Giao diện Web được xây dựng tối ưu cho màn hình Desktop và Tablet, hỗ trợ giao diện sáng/tối (Dark/Light mode) và bố cục responsive._
-
-|                   Trang Đăng nhập & Đăng ký                    |           Phòng Chat chính (Direct Message & Groups)           |
-| :------------------------------------------------------------: | :------------------------------------------------------------: |
-|    ![Giao diện đăng nhập Web](./screenshots/login-form.png)    |   ![Giao diện phòng chat Web](./screenshots/chat-group.png)    |
-| _Hỗ trợ đăng nhập nhanh bằng tài khoản test hoặc đăng ký mới._ | _Danh sách phòng chat, lịch sử tin nhắn, và thanh công cụ AI._ |
-
-|                Cuộc gọi Video & Audio (WebRTC)                 |               Giao diện Trợ lý AI (Langchain)                |
-| :------------------------------------------------------------: | :----------------------------------------------------------: |
-|     ![Giao diện gọi video Web](./screenshots/web-call.png)     | ![Giao diện Chat với tài liệu Web](./screenshots/web-ai.png) |
-| _Cuộc gọi video thời gian thực độ trễ thấp thông qua LiveKit._ |    _Đọc hiểu tài liệu PDF/DOCX và chat trực tiếp với AI._    |
-
-### 📱 Giao diện Mobile App (React Native)
-
-_Giao diện Mobile được thiết kế chuẩn Native bằng React Native Paper và React Navigation, tối ưu hóa cử chỉ vuốt và hiển thị tốt trên cả iOS và Android._
-
-|                   Trang chủ & Danh sách Chat                    |                       Cuộc gọi Video di động                        |                    Trang cá nhân & Cài đặt                    |
-| :-------------------------------------------------------------: | :-----------------------------------------------------------------: | :-----------------------------------------------------------: |
-|     ![Giao diện Chat Mobile](./screenshots/mobile-chat.jpg)     |    ![Giao diện gọi Video Mobile](./screenshots/mobile-call.jpg)     | ![Giao diện Cài đặt Mobile](./screenshots/mobile-profile.jpg) |
-| _Hiển thị danh sách tin nhắn gần nhất và trạng thái hoạt động._ | _Giao diện cuộc gọi native hỗ trợ camera trước/sau và bật tắt mic._ |  _Quản lý thông tin cá nhân, đồng bộ khóa E2EE qua QR Code._  |
+*(Bạn cũng có thể tự đăng ký tài khoản mới trực tiếp trên giao diện để trải nghiệm toàn bộ tính năng).*
 
 ---
 
@@ -55,8 +29,9 @@ _Giao diện Mobile được thiết kế chuẩn Native bằng React Native Pap
 - **Trò chuyện thời gian thực (Real-time Chat):** Gửi tin nhắn, trạng thái online/offline, thông báo đang nhập văn bản (typing indicator) và trạng thái tin nhắn (đã gửi/đã đọc) thông qua **Socket.io**.
 - **Mã hóa đầu cuối (End-to-End Encryption - E2EE):** Cơ chế mã hóa lai (hybrid encryption) kết hợp giữa **RSA** và **AES** (`jsencrypt` & `crypto-js`). Nội dung tin nhắn chỉ có người gửi và người nhận đọc được, máy chủ (server) hoàn toàn không thể giải mã.
 - **Gọi Video & Audio chất lượng cao:** Thực hiện các cuộc gọi cá nhân hoặc cuộc gọi nhóm thời gian thực, độ trễ cực thấp dựa trên **LiveKit (WebRTC)** và **Simple Peer**.
-- **Trợ lý AI & Trích xuất tài liệu:** Tích hợp **Gemini AI** / **Groq** và **Langchain** để phân tích tài liệu trực tiếp trong cửa sổ chat. Hỗ trợ đọc các định dạng file PDF, DOCX, XLSX để trả lời câu hỏi của người dùng.
+- **Trợ lý AI & Trợ năng giọng nói:** Tích hợp **Gemini AI** / **Groq** hỗ trợ phản hồi thông minh trong hội thoại kết hợp **Amazon Polly** chuyển văn bản thành giọng nói (Text-to-Speech).
 - **Quản lý file & Email chuyên nghiệp:** Upload tệp tin dung lượng lớn qua **AWS S3** và **Cloudinary**; Gửi email xác thực tài khoản và thông báo qua **AWS SES** / **Nodemailer**.
+- **Tự động hóa CI/CD:** Tự động build và deploy Frontend lên S3/CloudFront qua **AWS CodePipeline** và **AWS CodeBuild**.
 
 ---
 
@@ -73,108 +48,49 @@ _Giao diện Mobile được thiết kế chuẩn Native bằng React Native Pap
 
 - **Runtime & Web Framework:** Node.js, Express, TypeScript
 - **Cơ sở dữ liệu:** MongoDB (Sử dụng Driver gốc để tối ưu hóa truy vấn)
+- **Bộ nhớ đệm (Caching):** Amazon ElastiCache (Redis)
 - **Real-Time & WebRTC:** Socket.io, LiveKit Server SDK
-- **Trí tuệ nhân tạo (AI):** Langchain, Google Generative AI, Groq SDK
-- **Lưu trữ & Dịch vụ:** Multer (xử lý file), Cloudinary & AWS S3 (lưu trữ cloud), AWS SES & Nodemailer (gửi mail)
+- **Trí tuệ nhân tạo (AI) & Giọng nói:** Google Generative AI, Groq SDK, Amazon Polly
+- **Dịch vụ Đám mây & Lưu trữ:** AWS S3, AWS SES, Cloudinary
+
+### Hạ tầng Điện toán đám mây & DevOps (AWS Infrastructure & CI/CD)
+
+- **Mạng & Bảo mật:** Amazon Route 53, AWS WAF, AWS Certificate Manager (ACM), Amazon CloudFront (CDN)
+- **Máy chủ ứng dụng:** Amazon EC2 (VPC / Public Subnet), Nginx Reverse Proxy, PM2
+- **Giám sát:** Amazon CloudWatch
+- **CI/CD Pipeline:** GitHub, AWS CodePipeline, AWS CodeBuild
 
 ---
 
 ## 📐 Kiến Trúc Hệ Thống (Architecture)
 
-```mermaid
-graph TD
-    %% Define Layers
-    subgraph Presentation_Layer [PRESENTATION LAYER]
-        direction TB
-        UI_Clients[UI Clients Platforms: React Web App, React Native Mobile]
-        subgraph Middlewares
-            UM[Users Middleware]
-            FM[Friends Middleware]
-            CM[Conversations Middleware]
-        end
-        subgraph Controllers
-            UC[UsersController]
-            CC[ConversationsController / GroupController]
-            MC[MessageController]
-            FC[FriendsController]
-            TC[TrafficController]
-        end
-    end
+![Kiến trúc Hạ tầng AWS ChatPulse](./screenshots/aws-architecture.png)
 
-    subgraph Business_Logic_Layer [BUSINESS LOGIC LAYER]
-        direction TB
-        US[UserService]
-        MS[MessageService / ConversationsService]
-        GS[GroupService]
-        FS[FriendService]
-        AIS[AIService]
-        SS[SocketService]
-        
-        subgraph Third_Party [Third-party & Infrastructure Services]
-            GAuth[Google OAuth 2.0]
-            S3[AWS S3]
-            SES[AWS SES]
-            TRAG[TrafficRagService]
-            OpenAI[OpenAI / Gemini API]
-            LiveKit[LiveKitService: Điều phối phòng kết nối Voice/Video Call WebRTC]
-        end
-    end
+Hệ thống được thiết kế và vận hành trực tiếp trên nền tảng **Amazon Web Services (AWS)** với mô hình phân tầng chặt chẽ:
 
-    subgraph Persistence_Layer [PERSISTENCE LAYER]
-        UserSch[UserSchema, RefreshTokenSchema, OtpSchema]
-        MsgSch[MessageSchema, ConversationSchema, CallSchema]
-        FriendSch[FriendSchema, FriendRequestSchema, UserBlocksSchema]
-    end
+### 1. Phân Tầng Dịch Vụ Mạng & Bảo Mật (Edge Services)
+* **Amazon Route 53:** Quản lý bản ghi DNS, điều phối phân giải tên miền chính và subdomain với độ trễ thấp.
+* **AWS Certificate Manager (ACM):** Cung cấp và quản lý chứng chỉ SSL/TLS, mã hóa HTTPS/WSS cho toàn bộ hệ thống.
+* **AWS WAF:** Tường lửa lớp ứng dụng (Layer 7) lọc lưu lượng truy cập độc hại, ngăn chặn tấn công giả mạo, SQLi và XSS.
+* **Amazon CloudFront:** Phân phối nội dung tĩnh (CDN) toàn cầu, lưu edge cache giúp tăng tốc độ tải trang cho người dùng.
 
-    subgraph Database_Layer [DATABASE LAYER]
-        DB[(MongoDB)]
-        KB[Knowledge Base: Folder Văn bản Luật: Thông tư/Nghị định]
-    end
+### 2. Máy Chủ & Bộ Nhớ Đệm (Region / VPC)
+* **Amazon EC2 (Public Subnet):** Máy chủ chạy ứng dụng Backend Node.js/Express, Engine Socket.IO và Nginx Reverse Proxy.
+* **Amazon ElastiCache (Private Subnet):** Cụm Redis In-Memory lưu trữ phiên làm việc (session), quản lý trạng thái online/offline thời gian thực với độ trễ mili-giây.
+* **MongoDB:** Cơ sở dữ liệu phân tán lưu trữ toàn bộ người dùng, nhóm chat và lịch sử tin nhắn.
 
-    %% Connections
-    UI_Clients -->|HTTP / REST API Requests| Middlewares
-    UI_Clients <-->|WebSocket Connection| SS
-    UI_Clients -.->|WebRTC Media Stream| LiveKit
+### 3. Dịch Vụ Lưu Trữ, Hỗ Trợ & Giám Sát
+* **Amazon S3:** Lưu trữ bundle tĩnh của Frontend (`dist/`) và media (avatar, file đính kèm).
+* **Amazon SES:** Cổng gửi email thông báo, xác thực tài khoản và mã OTP giao dịch.
+* **Amazon Polly:** Dịch vụ Text-to-Speech chuyển đổi tin nhắn văn bản thành giọng đọc tự nhiên.
+* **Amazon CloudWatch:** Giám sát thời gian thực số liệu phần cứng EC2 (CPU Utilization, Network Traffic) và kích hoạt cảnh báo tự động.
 
-    UM --> UC
-    UM --> CC
-    UM --> MC
-    FM --> CC
-    FM --> FC
-    CM --> CC
-    CM --> MC
-    
-    UC --> US
-    CC --> MS
-    CC --> GS
-    MC --> MS
-    FC --> FS
-    TC --> AIS
+### 4. Luồng Tự Động Hóa CI/CD (CI/CD Pipeline)
+* **GitHub:** Tiếp nhận commit mã nguồn mới nhất từ Developer trên nhánh `main`.
+* **AWS CodePipeline:** Tự động bắt sự kiện webhook từ GitHub và chuyển tiếp sang môi trường build.
+* **AWS CodeBuild:** Khởi tạo container độc lập thực thi `npm run build`, đồng bộ thư mục tĩnh lên **Amazon S3** (`aws s3 sync`) và gửi lệnh xóa cache tức thì trên **Amazon CloudFront** (`aws cloudfront create-invalidation`).
 
-    US --> GAuth
-    US --> SES
-    US --> S3
-    MS --> S3
-    
-    AIS --> TRAG
-    AIS --> OpenAI
-    
-    TRAG --> KB
-    
-    US --> UserSch
-    MS --> MsgSch
-    FS --> FriendSch
-    
-    UserSch --> DB
-    MsgSch --> DB
-    FriendSch --> DB
-    
-    %% Styling
-    style Presentation_Layer fill:#e1f5fe,stroke:#01579b
-    style Business_Logic_Layer fill:#c8e6c9,stroke:#2e7d32
-    style Persistence_Layer fill:#fff9c4,stroke:#fbc02d
-    style Database_Layer fill:#ede7f6,stroke:#512da8
-```
+---
 
 ### 🔒 Cơ chế hoạt động của Mã hóa đầu cuối (E2EE):
 
@@ -197,59 +113,7 @@ graph TD
 - **Vấn đề:** Trên thiết bị di động (Mobile), khi mạng yếu hoặc thay đổi từ WiFi sang 4G thường xuyên xảy ra tình trạng mất kết nối cuộc gọi.
 - **Giải pháp:** Sử dụng cơ chế tái thiết lập kết nối (reconnection) tự động của LiveKit SDK kết hợp cấu hình băng thông thích ứng (simulcast) để tự động hạ chất lượng video khi mạng yếu, giữ kết nối audio luôn ổn định.
 
----
+### 3. Tự động hóa Triển khai và Đồng bộ Cache CDN
 
-## ⚙️ Hướng Dẫn Chạy Dự Án (Local Setup)
-
-### Yêu cầu hệ thống
-
-- Node.js (v18 trở lên)
-- MongoDB (Local hoặc MongoDB Atlas)
-- Các API Keys: Gemini/Groq, AWS S3 & SES, Cloudinary, LiveKit Server
-
-### Các bước cài đặt chi tiết
-
-1. **Clone repository này:**
-
-   ```bash
-   git clone https://github.com/quoc-quy/ChatPulse.git
-   cd ChatPulse
-   ```
-
-2. **Cài đặt và chạy Backend:**
-
-   ```bash
-   cd backend
-   npm install
-   # Tạo file .env dựa trên các biến môi trường cần thiết
-   npm run dev
-   ```
-
-3. **Cài đặt và chạy Frontend (Web):**
-
-   ```bash
-   cd ../frontend
-   npm install
-   # Tạo file .env trỏ API_URL về backend
-   npm run dev
-   ```
-
-4. **Cài đặt và chạy Mobile App:**
-   ```bash
-   cd ../mobile
-   npm install
-   npx expo start
-   ```
-
----
-
-## ✉️ Thông Tin Liên Hệ
-
-- **Họ và tên:** Trần Nguyễn Quốc Quý
-- **Email:** [quocquytnqq@gmail.com](mailto:quocquytnqq@gmail.com)
-- **GitHub:** [github.com/quoc-quy](https://github.com/quoc-quy)
-- **LinkedIn:** [Trần Nguyễn Quốc Quý](https://linkedin.com/in/quocquy)
-
----
-
-_Cảm ơn các nhà tuyển dụng đã dành thời gian xem qua dự án của mình!_
+- **Vấn đề:** Khi cập nhật phiên bản Frontend mới lên S3, người dùng vẫn bị tải lại bản cũ do cơ chế Edge Caching lâu dài của CloudFront.
+- **Giải pháp:** Thiết lập script trong `buildspec.yml` của AWS CodeBuild tự động chạy lệnh tạo invalidation `/*` ngay sau khi tải tệp lên S3, giúp bản build mới xuất hiện lập tức trên toàn cầu.
